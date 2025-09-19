@@ -368,7 +368,7 @@ NLPModels.hess_coord!(
   y::AbstractVector,
   vals::AbstractVector;
   obj_weight::Real = one(eltype(x)),
-) = hess_coord!(qp, x, vals, obj_weight = obj_weight)
+) = NLPModels.hess_coord!(qp, x, vals, obj_weight = obj_weight)
 
 function NLPModels.jac_lin_structure!(
   qp::QuadraticModel{T, S, M1, M2},
@@ -489,7 +489,7 @@ NLPModels.hprod!(
   v::AbstractVector,
   Hv::AbstractVector;
   obj_weight::Real = one(eltype(x)),
-) = hprod!(qp, x, v, Hv, obj_weight = obj_weight)
+) = NLPModels.hprod!(qp, x, v, Hv, obj_weight = obj_weight)
 
 function NLPModels.jprod_lin!(
   qp::AbstractQuadraticModel,

@@ -260,3 +260,220 @@ end
 
 include("test_presolve.jl")
 include("test_allocations.jl")
+
+@testset "ParametricQuadraticModels" begin
+    @testset "Basic construction" begin
+        # Test basic construction
+        n = 3
+        m = 2
+        p = 2
+        pcon = 1
+        
+        c = [1.0, 2.0, 3.0]
+        F = [1.0 0.0; 0.0 0.5; 0.0 0.0]
+        H = [2.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+        A = [1.0 1.0 0.0; 0.0 1.0 1.0]
+        B = [1.0 0.0; 0.0 1.0]
+        P = [1.0 0.0]
+        lcon = [0.0, 0.0]
+        ucon = [5.0, 5.0]
+        lparam = [-1.0]
+        uparam = [1.0]
+        
+        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, P=P, lcon=lcon, ucon=ucon, lparam=lparam, uparam=uparam)
+        
+        @test pqp isa ParametricQuadraticModel
+        @test pqp.meta.nvar == n
+        @test pqp.meta.ncon == m
+        @test size(pqp.data.F) == (n, p)
+        @test size(pqp.data.B) == (m, p)
+        @test size(pqp.data.P) == (pcon, p)
+    end
+    
+    @testset "Parameter evaluation" begin
+        n = 2
+        m = 1
+        p = 2
+        
+        c = [1.0, 2.0]
+        F = [1.0 0.0; 0.0 0.5]
+        H = [2.0 0.0; 0.0 1.0]
+        A = [1.0 1.0]
+        B = [1.0 0.0]
+        lcon = [0.0]
+        ucon = [5.0]
+        
+        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, lcon=lcon, ucon=ucon)
+        
+        θ = [1.0, 2.0]
+        qp = evaluate_at_parameter(pqp, θ)
+        
+        @test qp isa QuadraticModel
+        @test qp.meta.nvar == n
+        @test qp.meta.ncon == m
+        
+        # Check that the linear term is c + F*θ
+        c_expected = c + F * θ
+        @test qp.data.c ≈ c_expected
+        
+        # Check that constraint bounds are lcon - B*θ, ucon - B*θ
+        Bθ = B * θ
+        @test qp.meta.lcon ≈ lcon - Bθ
+        @test qp.meta.ucon ≈ ucon - Bθ
+    end
+    
+    @testset "NLPModels interface" begin
+        n = 2
+        m = 1
+        p = 2
+        
+        c = [1.0, 2.0]
+        F = [1.0 0.0; 0.0 0.5]
+        H = [2.0 0.0; 0.0 1.0]
+        A = [1.0 1.0]
+        B = [1.0 0.0]
+        lcon = [0.0]
+        ucon = [5.0]
+        
+        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, lcon=lcon, ucon=ucon)
+        x = [1.0, 2.0]
+        
+        # Test objective function
+        obj_val = obj(pqp, x)
+        expected_obj = 0.5 * dot(x, H * x) + dot(c, x)
+        @test obj_val ≈ expected_obj
+        
+        # Test gradient
+        g = grad(pqp, x)
+        expected_g = c + H * x
+        @test g ≈ expected_g
+        
+        # Test constraints
+        cons_val = cons(pqp, x)
+        expected_cons = A * x
+        @test cons_val ≈ expected_cons
+    end
+    
+    @testset "Sparse matrices" begin
+        n = 3
+        m = 2
+        p = 2
+        
+        c = [1.0, 2.0, 3.0]
+        F = sparse([1.0 0.0; 0.0 0.5; 0.0 0.0])
+        H = sparse([2.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0])
+        A = sparse([1.0 1.0 0.0; 0.0 1.0 1.0])
+        B = sparse([1.0 0.0; 0.0 1.0])
+        lcon = [-Inf, -Inf]
+        ucon = [Inf, Inf]
+        
+        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, lcon=lcon, ucon=ucon)
+        
+        @test pqp isa ParametricQuadraticModel
+        @test issparse(pqp.data.F)
+        @test issparse(pqp.data.H)
+        @test issparse(pqp.data.A)
+        @test issparse(pqp.data.B)
+    end
+    
+    @testset "Parameter sensitivity functions" begin
+        n = 2
+        m = 1
+        p = 2
+        
+        c = [1.0, 2.0]
+        F = sparse([1.0 0.0; 0.0 0.5])
+        H = sparse([2.0 0.0; 0.0 1.0])
+        A = sparse([1.0 1.0])
+        B = sparse([1.0 0.0])
+        lcon = [0.0]
+        ucon = [5.0]
+        
+        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, lcon=lcon, ucon=ucon)
+        x = [1.0, 2.0]
+        θ = [1.0, 2.0]
+        y = [1.0]
+        
+        # Test jac_param
+        B_result = jac_param(pqp, x, θ)
+        @test B_result == B
+        
+        # Test jac_param!
+        B_copy = similar(B)
+        jac_param!(pqp, x, θ, B_copy)
+        @test B_copy == B
+        
+        # Test hess_param
+        F_result = hess_param(pqp, x, θ, y)
+        @test F_result == F
+        
+        # Test hess_param!
+        F_copy = similar(F)
+        hess_param!(pqp, x, θ, y, F_copy)
+        @test F_copy == F
+        
+        # Test structure functions
+        rows = Vector{Int}(undef, nnz(B))
+        cols = Vector{Int}(undef, nnz(B))
+        jac_param_structure!(pqp, rows, cols)
+        @test length(rows) == nnz(B)
+        @test length(cols) == nnz(B)
+        
+        rows = Vector{Int}(undef, nnz(F))
+        cols = Vector{Int}(undef, nnz(F))
+        hess_param_structure!(pqp, rows, cols)
+        @test length(rows) == nnz(F)
+        @test length(cols) == nnz(F)
+        
+        # Test coordinate functions
+        vals_jac = zeros(nnz(B))
+        jac_param_coord!(pqp, x, θ, vals_jac)
+        @test vals_jac == B.nzval
+        
+        vals_hess_param = zeros(nnz(F))
+        hess_param_coord!(pqp, x, θ, y, vals_hess_param)
+        @test vals_hess_param == F.nzval
+    end
+    
+    @testset "Parameter feasibility check" begin
+        n = 2
+        m = 1
+        p = 2
+        pcon = 1
+        
+        c = [1.0, 2.0]
+        F = [1.0 0.0; 0.0 0.5]
+        H = [2.0 0.0; 0.0 1.0]
+        A = [1.0 1.0]
+        B = [1.0 0.0]
+        P_matrix = [1.0 0.0]  # 1x2 matrix: 1 parameter constraint, 2 parameters
+        lcon = [0.0]
+        ucon = [5.0]
+        lparam_bounds = [-1.0]
+        uparam_bounds = [1.0]
+        
+        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, P=P_matrix, lcon=lcon, ucon=ucon, lparam=lparam_bounds, uparam=uparam_bounds)
+        
+        # Test feasible parameter
+        θ_feasible = [0.5, 0.0]  # P*θ = [0.5] which is in [-1.0, 1.0]
+        qp_feasible = evaluate_at_parameter(pqp, θ_feasible)
+        @test qp_feasible isa QuadraticModel
+        
+        # Test infeasible parameter (violates upper bound)
+        θ_infeasible_upper = [2.0, 0.0]  # P*θ = [2.0] which is > 1.0
+        @test_throws ArgumentError evaluate_at_parameter(pqp, θ_infeasible_upper)
+        
+        # Test infeasible parameter (violates lower bound)
+        θ_infeasible_lower = [-2.0, 0.0]  # P*θ = [-2.0] which is < -1.0
+        @test_throws ArgumentError evaluate_at_parameter(pqp, θ_infeasible_lower)
+        
+        # Test with check_feasibility=false (should not throw)
+        qp_no_check = evaluate_at_parameter(pqp, θ_infeasible_upper; check_feasibility=false)
+        @test qp_no_check isa QuadraticModel
+        
+        # Test with no parameter constraints (should not throw)
+        pqp_no_param_con = ParametricQuadraticModel(c, F, H; A=A, B=B, lcon=lcon, ucon=ucon)
+        qp_no_param_con = evaluate_at_parameter(pqp_no_param_con, θ_infeasible_upper)
+        @test qp_no_param_con isa QuadraticModel
+    end
+end

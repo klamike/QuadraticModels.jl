@@ -555,68 +555,65 @@ function NLPModels.jac_lin(
   return pqp.data.A
 end
 
-## below are not needed since PQM <: AbstractQM
-# function NLPModels.hprod!(
-#   pqp::ParametricQuadraticModel{T, S},
-#   x::AbstractVector,
-#   v::AbstractVector,
-#   Hv::AbstractVector;
-#   obj_weight::Real = one(eltype(x)),
-# )
-#   NLPModels.increment!(pqp, :neval_hprod)
-#   mul!(Hv, Symmetric(pqp.data.H, :L), v)
-#   if obj_weight != 1
-#     Hv .*= obj_weight
-#   end
-#   return Hv
-# end
+function NLPModels.hprod!(
+  pqp::ParametricQuadraticModel{T, S},
+  x::AbstractVector,
+  v::AbstractVector,
+  Hv::AbstractVector;
+  obj_weight::Real = one(eltype(x)),
+)
+  NLPModels.increment!(pqp, :neval_hprod)
+  mul!(Hv, Symmetric(pqp.data.H, :L), v)
+  if obj_weight != 1
+    Hv .*= obj_weight
+  end
+  return Hv
+end
 
-# NLPModels.hprod!(
-#   pqp::ParametricQuadraticModel{T, S},
-#   x::AbstractVector,
-#   y::AbstractVector,
-#   v::AbstractVector,
-#   Hv::AbstractVector;
-#   obj_weight::Real = one(eltype(x)),
-# ) = hprod!(pqp, x, v, Hv, obj_weight = obj_weight)
+NLPModels.hprod!(
+  pqp::ParametricQuadraticModel{T, S},
+  x::AbstractVector,
+  y::AbstractVector,
+  v::AbstractVector,
+  Hv::AbstractVector;
+  obj_weight::Real = one(eltype(x)),
+) = hprod!(pqp, x, v, Hv, obj_weight = obj_weight)
 
-# function NLPModels.jprod_lin!(
-#   pqp::ParametricQuadraticModel{T, S},
-#   x::AbstractVector,
-#   v::AbstractVector,
-#   Av::AbstractVector,
-# )
-#   @lencheck pqp.meta.nvar x v
-#   @lencheck pqp.meta.nlin Av
-#   NLPModels.increment!(pqp, :neval_jprod_lin)
-#   mul!(Av, pqp.data.A, v)
-#   return Av
-# end
+function NLPModels.jprod_lin!(
+  pqp::ParametricQuadraticModel{T, S},
+  x::AbstractVector,
+  v::AbstractVector,
+  Av::AbstractVector,
+)
+  @lencheck pqp.meta.nvar x v
+  @lencheck pqp.meta.nlin Av
+  NLPModels.increment!(pqp, :neval_jprod_lin)
+  mul!(Av, pqp.data.A, v)
+  return Av
+end
 
-# function NLPModels.jtprod!(
-#   pqp::ParametricQuadraticModel{T, S},
-#   x::AbstractVector,
-#   v::AbstractVector,
-#   Atv::AbstractVector,
-# )
-#   @lencheck pqp.meta.nvar x Atv
-#   @lencheck pqp.meta.ncon v
-#   NLPModels.increment!(pqp, :neval_jtprod)
-#   mul!(Atv, transpose(pqp.data.A), v)
-#   return Atv
-# end
+function NLPModels.jtprod!(
+  pqp::ParametricQuadraticModel{T, S},
+  x::AbstractVector,
+  v::AbstractVector,
+  Atv::AbstractVector,
+)
+  @lencheck pqp.meta.nvar x Atv
+  @lencheck pqp.meta.ncon v
+  NLPModels.increment!(pqp, :neval_jtprod)
+  mul!(Atv, transpose(pqp.data.A), v)
+  return Atv
+end
 
-# function NLPModels.jtprod_lin!(
-#   pqp::ParametricQuadraticModel{T, S},
-#   x::AbstractVector,
-#   v::AbstractVector,
-#   Atv::AbstractVector,
-# )
-#   @lencheck pqp.meta.nvar x Atv
-#   @lencheck pqp.meta.nlin v
-#   NLPModels.increment!(pqp, :neval_jtprod_lin)
-#   mul!(Atv, transpose(pqp.data.A), v)
-#   return Atv
-# end
-
-# end same as QuadraticModel
+function NLPModels.jtprod_lin!(
+  pqp::ParametricQuadraticModel{T, S},
+  x::AbstractVector,
+  v::AbstractVector,
+  Atv::AbstractVector,
+)
+  @lencheck pqp.meta.nvar x Atv
+  @lencheck pqp.meta.nlin v
+  NLPModels.increment!(pqp, :neval_jtprod_lin)
+  mul!(Atv, transpose(pqp.data.A), v)
+  return Atv
+end

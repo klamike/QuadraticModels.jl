@@ -125,9 +125,9 @@ function ParametricQuadraticModel(
   c::S,
   F::Union{AbstractMatrix{T}, AbstractLinearOperator{T}},
   H::Union{AbstractMatrix{T}, AbstractLinearOperator{T}};
-  θ::S = fill!(S(undef, size(F, 2)), T(0)),
+  θ::S = fill!(S(undef, size(F, 2)), zero(T)),
   A::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = similar_empty_matrix(H, length(c)),
-  B::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = similar_empty_matrix(H, length(θ)),
+  B::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = fill!(similar(H, size(A, 1), length(θ)), zero(T)),
   lcon::S = S(undef, 0),
   ucon::S = S(undef, 0),
   lvar::S = fill!(S(undef, length(c)), T(-Inf)),

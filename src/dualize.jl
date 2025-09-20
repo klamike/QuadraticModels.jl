@@ -65,15 +65,26 @@ function dualize(pqp::AbstractParametricQuadraticModel{T, S}; skip_adding_equali
   fill!(H′, zero(T))
   H′[𝓌, 𝓌] = pqp.data.H
 
-  if !skip_adding_equality_constraints
+  A′, B′, lcon′, ucon′ = if !skip_adding_equality_constraints
     A′ = similar(pqp.data.A, m′, n′)
     A′[:, 𝓌] = -pqp.data.H
     A′[:, 𝓎ₗ] = pqp.data.A'
     A′[:, 𝓎ᵤ] = -pqp.data.A'
     A′[:, 𝓏ₗ] = I(n)
     A′[:, 𝓏ᵤ] = -I(n)
+
+    B′ = -pqp.data.F
+    lcon′ = pqp.data.c
+    ucon′ = pqp.data.c
+
+    (A′, B′, lcon′, ucon′)
   else
     A′ = similar(pqp.data.A, 0, n′)
+    B′ = similar(pqp.data.B, 0, n′)
+    lcon′ = similar(pqp.data.lcon, 0)
+    ucon′ = similar(pqp.data.ucon, 0)
+
+    (A′, B′, lcon′, ucon′)
   end
 
   return ParametricQuadraticModel(
@@ -81,9 +92,9 @@ function dualize(pqp::AbstractParametricQuadraticModel{T, S}; skip_adding_equali
     F′,
     H′;
     A = A′,
-    B = -pqp.data.F,
-    lcon = pqp.data.c,
-    ucon = pqp.data.c,
+    B = B′,
+    lcon = lcon′,
+    ucon = ucon′,
     lvar = fill!(typeof(pqp.data.lvar)(undef, n′), zero(T)),
     uvar = fill!(typeof(pqp.data.uvar)(undef, n′), Inf),
     c0 = -pqp.data.c0,

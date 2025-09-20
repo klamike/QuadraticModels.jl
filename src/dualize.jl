@@ -4,10 +4,9 @@
 Returns the dual of the parametric quadratic program.
 
 The dual problem has the form:
-    max  -(-(1/2) w' H w + yₗ'lcon - yᵤ'ucon + zₗ'lvar - zᵤ'uvar + (Bθ)'(yₗ - yᵤ) + c₀)
+    max  -(1/2) w' H w + yₗ'lcon - yᵤ'ucon + zₗ'lvar - zᵤ'uvar + (Bθ)'(yₗ - yᵤ) + c₀
     s.t. A'(yₗ - yᵤ) + zₗ - zᵤ = Hw + c + Fθ
          yₗ, yᵤ, zₗ, zᵤ ≥ 0
-         lparam ≤ P θ ≤ uparam
 
 We arrange the variables like x ← [w, yₗ, yᵤ, zₗ, zᵤ]. Its problem data is then:
 
@@ -25,9 +24,6 @@ A ← [-H A' -A' I -I]
 lcon ← c
 ucon ← c
 B ← -F
-P ← P
-lparam ← lparam
-uparam ← uparam
 lvar ← 0
 uvar ← Inf
 
@@ -37,7 +33,7 @@ where:
 - zₗ, zᵤ are dual variables for lower and upper variable bounds
 - θ is the parameter vector
 """
-function dualize(pqp::AbstractParametricQuadraticModel{T, S}) where {T, S}
+function dualize(pqp::AbstractParametricQuadraticModel{T, S}; skip_adding_equality_constraints::Bool = false) where {T, S}
   # Get dimensions
   n = pqp.meta.nvar  # number of primal variables
   m = pqp.meta.ncon  # number of constraints
@@ -46,8 +42,6 @@ function dualize(pqp::AbstractParametricQuadraticModel{T, S}) where {T, S}
   n′ = n + 2m + 2n
   m′ = n
 
-  zeros = issparse(pqp.data.H) ? spzeros : Base.zeros  #FIXME
-
   𝓌 = 1:n
   𝓎ₗ = (n + 1):(n + m)
   𝓎ᵤ = (n + m + 1):(n + 2m)
@@ -55,44 +49,44 @@ function dualize(pqp::AbstractParametricQuadraticModel{T, S}) where {T, S}
   𝓏ᵤ = (n + 2m + n + 1):n′
 
   c′ = [
-    zeros(T, n)
+    fill!(typeof(pqp.data.c)(undef, n), zero(T))
     -pqp.meta.lcon
     pqp.meta.ucon
     -pqp.meta.lvar
     pqp.meta.uvar
   ]
 
-  F′ = zeros(T, n′, p)
+  F′ = similar(pqp.data.F, n′, p)
+  fill!(F′, zero(T))
   F′[𝓎ₗ, :] = -pqp.data.B'
   F′[𝓎ᵤ, :] = pqp.data.B'
 
-  H′ = zeros(T, n′, n′)
+  H′ = similar(pqp.data.H, n′, n′)
+  fill!(H′, zero(T))
   H′[𝓌, 𝓌] = pqp.data.H
 
-  A′ = zeros(T, m′, n′)
-  A′[:, 𝓌] = -pqp.data.H
-  A′[:, 𝓎ₗ] = pqp.data.A'
-  A′[:, 𝓎ᵤ] = -pqp.data.A'
-  A′[:, 𝓏ₗ] = I(n)
-  A′[:, 𝓏ᵤ] = -I(n)
+  if !skip_adding_equality_constraints
+    A′ = similar(pqp.data.A, m′, n′)
+    A′[:, 𝓌] = -pqp.data.H
+    A′[:, 𝓎ₗ] = pqp.data.A'
+    A′[:, 𝓎ᵤ] = -pqp.data.A'
+    A′[:, 𝓏ₗ] = I(n)
+    A′[:, 𝓏ᵤ] = -I(n)
+  else
+    A′ = similar(pqp.data.A, 0, n′)
+  end
 
-  # Create dual model
-  dual_pqp = ParametricQuadraticModel(
+  return ParametricQuadraticModel(
     c′,
     F′,
     H′;
     A = A′,
     B = -pqp.data.F,
-    P = pqp.data.P,
     lcon = pqp.data.c,
     ucon = pqp.data.c,
-    lvar = zeros(n′),
-    uvar = Inf * ones(n′),
-    lparam = pqp.data.lparam,
-    uparam = pqp.data.uparam,
+    lvar = fill!(typeof(pqp.data.lvar)(undef, n′), zero(T)),
+    uvar = fill!(typeof(pqp.data.uvar)(undef, n′), Inf),
     c0 = -pqp.data.c0,
     name = "Dual of $(pqp.meta.name)",
   )
-
-  return dual_pqp
 end

@@ -28,7 +28,7 @@ import NLPModelsModifiers: SlackModel, slack_meta
 import Base.convert
 
 export AbstractQuadraticModel, QuadraticModel, presolve, postsolve, postsolve!, QMSolution
-export AbstractParametricQuadraticModel, ParametricQuadraticModel, PQPData, evaluate_at_parameter
+export AbstractParametricQuadraticModel, ParametricQuadraticModel, PQPData, evaluate_at_parameter, dualize
 export jac_param, jac_param!, hess_param, hess_param!
 export jac_param_structure!, hess_param_structure!, jac_param_coord!, hess_param_coord!
 

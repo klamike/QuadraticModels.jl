@@ -186,10 +186,7 @@ function set_parameter!(
   pqp::AbstractParametricQuadraticModel{T, S},
   θ::AbstractVector;
 ) where {T, S}
-
-  # Set the parameter value
   copy!(pqp.data.θ, θ)
-  return pqp
 end
 
 """
@@ -205,23 +202,17 @@ function evaluate_at_parameter(
   pqp::AbstractParametricQuadraticModel{T, S},
   θ::AbstractVector;
 ) where {T, S}
-  # Compute the effective linear term: c + Fθ
   c_eff = copy(linobj(pqp, θ))
 
-  # Compute the effective constraint bounds: lcon - B*θ, ucon - B*θ  # FIXME: make this two functions
-  lcon_eff = similar(pqp.meta.lcon)
-  ucon_eff = similar(pqp.meta.ucon)
-  copy!(lcon_eff, pqp.meta.lcon)
-  copy!(ucon_eff, pqp.meta.ucon)
+  lcon_eff = copy(pqp.meta.lcon)
+  ucon_eff = copy(pqp.meta.ucon)
+  
+  Bθ = similar(lcon_eff)
+  mul!(Bθ, pqp.data.B, θ)
 
-  if length(θ) > 0 && size(pqp.data.B, 1) > 0 && size(pqp.data.B, 2) > 0
-    Bθ = similar(lcon_eff)
-    mul!(Bθ, pqp.data.B, θ)
-    lcon_eff -= Bθ
-    ucon_eff -= Bθ
-  end
+  lcon_eff -= Bθ
+  ucon_eff -= Bθ
 
-  # Create and return a QuadraticModel
   return QuadraticModel(
     c_eff,
     pqp.data.H,
@@ -238,8 +229,12 @@ abstract type AbstractMap end
 struct AffineMap{MA, VB} <: AbstractMap
   A::MA
   b::VB
+  x::VB
 end
-# function evaluate()
+function evaluate(map::AffineMap, θ::AbstractVector)
+    copy!(map.x, map.b)
+    return mul!(map.x, map.A, θ)
+end
 
 """
     evaluate_with_map(pqp::AbstractParametricQuadraticModel, M::AbstractMap)
@@ -258,7 +253,6 @@ function evaluate_with_map(
   check_bounds && error("Not implemented")
   @assert issymmetric(pqp.data.H)  # FIXME: H=(H+H')/2?
 
-  # Unpack
   MA = M.A
   Mb = M.b
 

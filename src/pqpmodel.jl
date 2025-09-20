@@ -549,8 +549,10 @@ function NLPModels.jac_lin(
   return pqp.data.A
 end
 
+# below can be removed if PQM is made to be a subtype of AbstractQM
+
 function NLPModels.hprod!(
-  pqp::ParametricQuadraticModel{T, S},
+  pqp::ParametricQuadraticModel,
   x::AbstractVector,
   v::AbstractVector,
   Hv::AbstractVector;
@@ -565,7 +567,7 @@ function NLPModels.hprod!(
 end
 
 NLPModels.hprod!(
-  pqp::ParametricQuadraticModel{T, S},
+  pqp::ParametricQuadraticModel,
   x::AbstractVector,
   y::AbstractVector,
   v::AbstractVector,
@@ -574,7 +576,7 @@ NLPModels.hprod!(
 ) = hprod!(pqp, x, v, Hv, obj_weight = obj_weight)
 
 function NLPModels.jprod_lin!(
-  pqp::ParametricQuadraticModel{T, S},
+  pqp::ParametricQuadraticModel,
   x::AbstractVector,
   v::AbstractVector,
   Av::AbstractVector,
@@ -587,7 +589,7 @@ function NLPModels.jprod_lin!(
 end
 
 function NLPModels.jtprod!(
-  pqp::ParametricQuadraticModel{T, S},
+  pqp::ParametricQuadraticModel,
   x::AbstractVector,
   v::AbstractVector,
   Atv::AbstractVector,
@@ -600,7 +602,7 @@ function NLPModels.jtprod!(
 end
 
 function NLPModels.jtprod_lin!(
-  pqp::ParametricQuadraticModel{T, S},
+  pqp::ParametricQuadraticModel,
   x::AbstractVector,
   v::AbstractVector,
   Atv::AbstractVector,

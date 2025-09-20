@@ -7,7 +7,6 @@ The parametric quadratic program has the form:
     min  (1/2) x' H x + c' x + (F θ)' x + c₀
     s.t. lcon ≤ A x + B θ ≤ ucon
          lvar ≤ x ≤ uvar
-         lparam ≤ P θ ≤ uparam
 
 where θ is the parameter vector.
 
@@ -15,7 +14,6 @@ It follows that the dual problem has the form:
     max  -(1/2) w' H w + yₗ'lcon - yᵤ'ucon + zₗ'lvar - zᵤ'uvar + (Bθ)'(yₗ - yᵤ) + c₀
     s.t. A'(yₗ - yᵤ) + zₗ - zᵤ = Hw + c + Fθ
          yₗ, yᵤ, zₗ, zᵤ ≥ 0
-         lparam ≤ P θ ≤ uparam
 
 # Fields
 - `c0::T`: constant term in objective
@@ -24,9 +22,6 @@ It follows that the dual problem has the form:
 - `H::M2`: Hessian matrix (quadratic term)
 - `A::M3`: constraint matrix for x
 - `B::M4`: constraint matrix for θ
-- `P::M5`: parameter constraint matrix
-- `lparam::S`: lower bounds for parameter constraints
-- `uparam::S`: upper bounds for parameter constraints
 """
 mutable struct PQPData{
   T,
@@ -35,7 +30,6 @@ mutable struct PQPData{
   M2 <: Union{AbstractMatrix{T}, AbstractLinearOperator{T}},
   M3 <: Union{AbstractMatrix{T}, AbstractLinearOperator{T}},
   M4 <: Union{AbstractMatrix{T}, AbstractLinearOperator{T}},
-  M5 <: Union{AbstractMatrix{T}, AbstractLinearOperator{T}},
 }
   c0::T         # constant term in objective
   c::S          # linear term in objective
@@ -43,27 +37,23 @@ mutable struct PQPData{
   H::M2         # Hessian matrix
   A::M3         # constraint matrix for x
   B::M4         # constraint matrix for θ
-  P::M5         # parameter constraint matrix  # FIXME: remove?
-  lparam::S     # lower bounds for parameter constraints
-  uparam::S     # upper bounds for parameter constraints
   θ::S          # current parameter value # FIXME: move to model level?
   v::S          # workspace vector 1 (nvar)
   vf::S         # workspace vector 2 (nvar)
 end
 
-@inline PQPData(c0, c, F, H, A, B, P, lparam, uparam, θ) =
-  PQPData(c0, c, F, H, A, B, P, lparam, uparam, θ, similar(c), similar(c))
-isdense(data::PQPData{T, S, M1, M2, M3, M4, M5}) where {T, S, M1, M2, M3, M4, M5} =
+@inline PQPData(c0, c, F, H, A, B, θ) =
+  PQPData(c0, c, F, H, A, B, θ, similar(c), similar(c))
+isdense(data::PQPData{T, S, M1, M2, M3, M4}) where {T, S, M1, M2, M3, M4} =
   M1 <: DenseMatrix ||
   M2 <: DenseMatrix ||
   M3 <: DenseMatrix ||
-  M4 <: DenseMatrix ||
-  M5 <: DenseMatrix
+  M4 <: DenseMatrix
 
 # TODO: convert helper
 function Base.convert(
-  ::Type{PQPData{T, S, MCOO, MCOO, MCOO, MCOO, MCOO}},
-  data::PQPData{T, S, M1, M2, M3, M4, M5},
+  ::Type{PQPData{T, S, MCOO, MCOO, MCOO, MCOO}},
+  data::PQPData{T, S, M1, M2, M3, M4},
 ) where {
   T,
   S,
@@ -71,18 +61,16 @@ function Base.convert(
   M2 <: AbstractMatrix,
   M3 <: AbstractMatrix,
   M4 <: AbstractMatrix,
-  M5 <: AbstractMatrix,
   MCOO <: SparseMatrixCOO{T},
 }
   HCOO = (M1 <: SparseMatrixCOO) ? data.H : SparseMatrixCOO(data.H)
   ACOO = (M2 <: SparseMatrixCOO) ? data.A : SparseMatrixCOO(data.A)
   BCOO = (M3 <: SparseMatrixCOO) ? data.B : SparseMatrixCOO(data.B)
-  PCOO = (M4 <: SparseMatrixCOO) ? data.P : SparseMatrixCOO(data.P)
-  return PQPData(data.c0, data.c, data.F, HCOO, ACOO, BCOO, PCOO, data.lparam, data.uparam, data.θ)
+  return PQPData(data.c0, data.c, data.F, HCOO, ACOO, BCOO, data.θ)
 end
 Base.convert(
-  ::Type{PQPData{T, S, MCOO, MCOO, MCOO, MCOO, MCOO}},
-  data::PQPData{T, S, M1, M2, M3, M4, M5},
+  ::Type{PQPData{T, S, MCOO, MCOO, MCOO, MCOO}},
+  data::PQPData{T, S, M1, M2, M3, M4},
 ) where {
   T,
   S,
@@ -90,14 +78,13 @@ Base.convert(
   M2 <: SparseMatrixCOO,
   M3 <: SparseMatrixCOO,
   M4 <: SparseMatrixCOO,
-  M5 <: SparseMatrixCOO,
   MCOO <: SparseMatrixCOO{T},
 } = data
 
 abstract type AbstractParametricQuadraticModel{T, S} <: AbstractNLPModel{T, S} end
 
 """
-    ParametricQuadraticModel{T, S, M1, M2, M3, M4, M5}
+    ParametricQuadraticModel{T, S, M1, M2, M3, M4}
 
 Parametric quadratic model implementing the NLPModels interface.
 
@@ -105,20 +92,19 @@ The parametric quadratic program has the form:
     min  (1/2) x' H x + c' x + (F θ)' x + c₀
     s.t. lcon ≤ A x + B θ ≤ ucon
          lvar ≤ x ≤ uvar
-         lparam ≤ P θ ≤ uparam
 
 where θ is the parameter vector.
 """
-mutable struct ParametricQuadraticModel{T, S, M1, M2, M3, M4, M5} <:
+mutable struct ParametricQuadraticModel{T, S, M1, M2, M3, M4} <:
                AbstractParametricQuadraticModel{T, S}
   meta::NLPModelMeta{T, S}
   counters::Counters
-  data::PQPData{T, S, M1, M2, M3, M4, M5}
+  data::PQPData{T, S, M1, M2, M3, M4}
 end
 
 function Base.convert(
-  ::Type{ParametricQuadraticModel{T, S, Mconv, Mconv, Mconv, Mconv, Mconv}},
-  qm::ParametricQuadraticModel{T, S, M1, M2, M3, M4, M5},
+  ::Type{ParametricQuadraticModel{T, S, Mconv, Mconv, Mconv, Mconv}},
+  qm::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
 ) where {
   T,
   S,
@@ -126,10 +112,9 @@ function Base.convert(
   M2 <: AbstractMatrix,
   M3 <: AbstractMatrix,
   M4 <: AbstractMatrix,
-  M5 <: AbstractMatrix,
   Mconv,
 }
-  data_conv = convert(PQPData{T, S, Mconv, Mconv, Mconv, Mconv, Mconv}, qm.data)
+  data_conv = convert(PQPData{T, S, Mconv, Mconv, Mconv, Mconv}, qm.data)
   return ParametricQuadraticModel(qm.meta, qm.counters, data_conv)
 end
 
@@ -143,32 +128,28 @@ function ParametricQuadraticModel(
   θ::S = fill!(S(undef, size(F, 2)), T(0)),
   A::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = similar_empty_matrix(H, length(c)),
   B::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = similar_empty_matrix(H, length(θ)),
-  P::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = similar_empty_matrix(H, length(θ)),
   lcon::S = S(undef, 0),
   ucon::S = S(undef, 0),
   lvar::S = fill!(S(undef, length(c)), T(-Inf)),
   uvar::S = fill!(S(undef, length(c)), T(Inf)),
-  lparam::S = fill!(S(undef, size(P, 1)), T(-Inf)),
-  uparam::S = fill!(S(undef, size(P, 1)), T(Inf)),
   c0::T = zero(T),
   name::String = "ParametricQuadraticModel",
 ) where {T, S}
   @assert all(lvar .≤ uvar)
   @assert all(lcon .≤ ucon)
-  @assert all(lparam .≤ uparam)
 
   ncon, nvar = size(A)
 
   if typeof(H) <: AbstractLinearOperator # convert A to a LinOp if A is a Matrix?
     nnzh = 0
     nnzj = 0
-    data = PQPData(c0, c, F, H, A, B, P, lparam, uparam, θ)
+    data = PQPData(c0, c, F, H, A, B, θ)
   else
     nnzh = typeof(H) <: DenseMatrix ? nvar * (nvar + 1) / 2 : nnz(H)
     nnzj = nnz(A)
     data =
-      typeof(H) <: Symmetric ? PQPData(c0, c, F, H.data, A, B, P, lparam, uparam, θ) :
-      PQPData(c0, c, F, H, A, B, P, lparam, uparam, θ)
+      typeof(H) <: Symmetric ? PQPData(c0, c, F, H.data, A, B, θ) :
+      PQPData(c0, c, F, H, A, B, θ)
   end
 
   return ParametricQuadraticModel(
@@ -200,37 +181,11 @@ Sets the current parameter value θ in the parametric quadratic model.
 # Arguments
 - `pqp`: The parametric quadratic model
 - `θ`: The parameter vector
-- `check_feasibility`: If true (default), checks if θ satisfies the parameter constraints lparam ≤ Pθ ≤ uparam
-
-# Throws
-- `ArgumentError`: If `check_feasibility=true` and θ does not satisfy the parameter constraints
 """
 function set_parameter!(
   pqp::AbstractParametricQuadraticModel{T, S},
   θ::AbstractVector;
-  check_feasibility::Bool = true,
 ) where {T, S}
-  # Check parameter feasibility if requested
-  if check_feasibility && length(θ) > 0 && size(pqp.data.P, 1) > 0 && size(pqp.data.P, 2) > 0
-    Pθ = similar(pqp.data.lparam)
-    mul!(Pθ, pqp.data.P, θ)
-
-    if !all(pqp.data.lparam .≤ Pθ .≤ pqp.data.uparam)
-      violated_lower = findall(Pθ .< pqp.data.lparam)
-      violated_upper = findall(Pθ .> pqp.data.uparam)
-
-      error_msg = "Parameter vector θ does not satisfy parameter constraints lparam ≤ Pθ ≤ uparam.\n"
-      if !isempty(violated_lower)
-        error_msg *= "Violated lower bounds at constraints: $violated_lower\n"
-        error_msg *= "Values: $(Pθ[violated_lower]), Lower bounds: $(pqp.data.lparam[violated_lower])\n"
-      end
-      if !isempty(violated_upper)
-        error_msg *= "Violated upper bounds at constraints: $violated_upper\n"
-        error_msg *= "Values: $(Pθ[violated_upper]), Upper bounds: $(pqp.data.uparam[violated_upper])\n"
-      end
-      throw(ArgumentError(error_msg))
-    end
-  end
 
   # Set the parameter value
   copy!(pqp.data.θ, θ)
@@ -245,10 +200,6 @@ Returns a QuadraticModel instance with the parameter θ fixed.
 # Arguments
 - `pqp`: The parametric quadratic model
 - `θ`: The parameter vector
-- `check_feasibility`: If true (default), checks if θ satisfies the parameter constraints lparam ≤ Pθ ≤ uparam
-
-# Throws
-- `ArgumentError`: If `check_feasibility=true` and θ does not satisfy the parameter constraints
 """
 function evaluate_at_parameter(
   pqp::AbstractParametricQuadraticModel{T, S},
@@ -266,8 +217,8 @@ function evaluate_at_parameter(
   if length(θ) > 0 && size(pqp.data.B, 1) > 0 && size(pqp.data.B, 2) > 0
     Bθ = similar(lcon_eff)
     mul!(Bθ, pqp.data.B, θ)
-    lcon_eff .-= Bθ
-    ucon_eff .-= Bθ
+    lcon_eff -= Bθ
+    ucon_eff -= Bθ
   end
 
   # Create and return a QuadraticModel
@@ -281,6 +232,82 @@ function evaluate_at_parameter(
     uvar = pqp.meta.uvar,
     c0 = pqp.data.c0,
   )
+end
+
+abstract type AbstractMap end
+struct AffineMap{MA, VB} <: AbstractMap
+  A::MA
+  b::VB
+end
+# function evaluate()
+
+"""
+    evaluate_with_map(pqp::AbstractParametricQuadraticModel, M::AbstractMap)
+
+Returns a QuadraticModel instance under the affine map M.
+
+# Arguments
+- `pqp`: The parametric quadratic model
+- `M`: The map
+"""
+function evaluate_with_map(
+  pqp::AbstractParametricQuadraticModel{T, S},
+  M::AffineMap;
+  check_bounds::Bool = false,
+) where {T, S}
+  check_bounds && error("Not implemented")
+  @assert issymmetric(pqp.data.H)  # FIXME: H=(H+H')/2?
+
+  # Unpack
+  MA = M.A
+  Mb = M.b
+
+  H = pqp.data.H
+  c = pqp.data.c
+  F = pqp.data.F
+  A = pqp.data.A
+  B = pqp.data.B
+
+  lcon = pqp.meta.lcon
+  ucon = pqp.meta.ucon
+  lvar = pqp.meta.lvar
+  uvar = pqp.meta.uvar
+
+  # =========================
+  # Objective: substitute x = MA*θ + Mb
+  #   1/2 x'Hx + c'x + (Fθ)'x + c0
+  # = 1/2 θ'(MA' H MA)θ + θ'(MA'(HMb + c)) + 1/2 Mb'HMb + c'Mb
+  #   + θ'(F' MA)θ + θ'(F' Mb) + c0
+  #
+  # =========================
+  H = Symmetric(MA' * H * MA + (F' * MA + MA' * F))
+  c = MA' * (H * Mb + c) + F' * Mb
+  c0 = 0.5 * (Mb' * H * Mb) + c' * Mb + pqp.data.c0
+
+  # =========================
+  # Constraints
+  # Original:
+  #   lcon ≤ A x + B θ ≤ ucon
+  #   lvar ≤ x ≤ uvar
+  #
+  # Substitute x = MA θ + Mb:
+  #   lcon - A Mb ≤ (A MA + B) θ ≤ ucon - A Mb
+  #   lvar - Mb   ≤ (MA) θ     ≤ uvar - Mb
+  #
+  # =========================
+  A1 = A * MA + B
+  l1 = lcon - A * Mb
+  u1 = ucon - A * Mb
+
+  A2 = MA
+  l2 = lvar - Mb
+  u2 = uvar - Mb
+
+  Aθ = vcat(A1, A2)
+  lθ = vcat(l1, l2)
+  uθ = vcat(u1, u2)
+
+  return QuadraticModel(c, H, A = Aθ, lcon = lθ, ucon = uθ, c0 = c0)
 end
 
 @inline linobj(pqp::AbstractParametricQuadraticModel, θ) = begin

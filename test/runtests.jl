@@ -273,21 +273,17 @@ include("test_allocations.jl")
         F = [1.0 0.0; 0.0 0.5; 0.0 0.0]
         H = [2.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
         A = [1.0 1.0 0.0; 0.0 1.0 1.0]
-        B = [1.0 0.0; 0.0 1.0]
-        P = [1.0 0.0]
+        # B = [1.0 0.0; 0.0 1.0]
         lcon = [0.0, 0.0]
         ucon = [5.0, 5.0]
-        lparam = [-1.0]
-        uparam = [1.0]
         
-        pqp = ParametricQuadraticModel(c, F, H; A=A, B=B, P=P, lcon=lcon, ucon=ucon, lparam=lparam, uparam=uparam)
+        pqp = ParametricQuadraticModel(c, F, H; A=A, lcon=lcon, ucon=ucon)
         
         @test pqp isa ParametricQuadraticModel
         @test pqp.meta.nvar == n
         @test pqp.meta.ncon == m
         @test size(pqp.data.F) == (n, p)
         @test size(pqp.data.B) == (m, p)
-        @test size(pqp.data.P) == (pcon, p)
     end
     
     @testset "Parameter evaluation" begin

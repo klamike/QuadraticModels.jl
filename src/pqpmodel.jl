@@ -42,13 +42,9 @@ mutable struct PQPData{
   vf::S         # workspace vector 2 (nvar)
 end
 
-@inline PQPData(c0, c, F, H, A, B, θ) =
-  PQPData(c0, c, F, H, A, B, θ, similar(c), similar(c))
+@inline PQPData(c0, c, F, H, A, B, θ) = PQPData(c0, c, F, H, A, B, θ, similar(c), similar(c))
 isdense(data::PQPData{T, S, M1, M2, M3, M4}) where {T, S, M1, M2, M3, M4} =
-  M1 <: DenseMatrix ||
-  M2 <: DenseMatrix ||
-  M3 <: DenseMatrix ||
-  M4 <: DenseMatrix
+  M1 <: DenseMatrix || M2 <: DenseMatrix || M3 <: DenseMatrix || M4 <: DenseMatrix
 
 # TODO: convert helper
 function Base.convert(
@@ -81,6 +77,23 @@ Base.convert(
   MCOO <: SparseMatrixCOO{T},
 } = data
 
+# TODO: move to nlpmodels
+"""
+    ParametricMeta{T, S}
+
+Metadata for parametric optimization problems containing parameter-specific information.
+
+# Fields
+- `nnzjp::Int`: number of nonzeros in the Jacobian with respect to parameters (∇ₚg)
+- `nnzhp::Int`: number of nonzeros in the Hessian with respect to parameters (∇ₓₚL)
+- `nparam::Int`: number of parameters
+"""
+struct ParametricMeta{T, S}
+  nnzjp::Int  # number of nonzeros in jac_param (∇ₚg)
+  nnzhp::Int  # number of nonzeros in hess_param (∇ₓₚL)
+  nparam::Int # number of parameters
+end
+
 abstract type AbstractParametricQuadraticModel{T, S} <: AbstractNLPModel{T, S} end
 
 """
@@ -98,6 +111,7 @@ where θ is the parameter vector.
 mutable struct ParametricQuadraticModel{T, S, M1, M2, M3, M4} <:
                AbstractParametricQuadraticModel{T, S}
   meta::NLPModelMeta{T, S}
+  pmeta::ParametricMeta{T, S}
   counters::Counters
   data::PQPData{T, S, M1, M2, M3, M4}
 end
@@ -115,7 +129,7 @@ function Base.convert(
   Mconv,
 }
   data_conv = convert(PQPData{T, S, Mconv, Mconv, Mconv, Mconv}, qm.data)
-  return ParametricQuadraticModel(qm.meta, qm.counters, data_conv)
+  return ParametricQuadraticModel(qm.meta, qm.pmeta, qm.counters, data_conv)
 end
 
 # TODO: sparse constructor
@@ -127,7 +141,10 @@ function ParametricQuadraticModel(
   H::Union{AbstractMatrix{T}, AbstractLinearOperator{T}};
   θ::S = fill!(S(undef, size(F, 2)), zero(T)),
   A::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = similar_empty_matrix(H, length(c)),
-  B::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = fill!(similar(H, size(A, 1), length(θ)), zero(T)),
+  B::Union{AbstractMatrix{T}, AbstractLinearOperator{T}} = fill!(
+    similar(H, size(A, 1), length(θ)),
+    zero(T),
+  ),
   lcon::S = S(undef, 0),
   ucon::S = S(undef, 0),
   lvar::S = fill!(S(undef, length(c)), T(-Inf)),
@@ -139,17 +156,21 @@ function ParametricQuadraticModel(
   @assert all(lcon .≤ ucon)
 
   ncon, nvar = size(A)
+  nparam = length(θ)
 
   if typeof(H) <: AbstractLinearOperator # convert A to a LinOp if A is a Matrix?
     nnzh = 0
     nnzj = 0
+    nnzjp = 0
+    nnzhp = 0
     data = PQPData(c0, c, F, H, A, B, θ)
   else
     nnzh = typeof(H) <: DenseMatrix ? nvar * (nvar + 1) / 2 : nnz(H)
     nnzj = nnz(A)
+    nnzjp = nnz(B)
+    nnzhp = nnz(F)
     data =
-      typeof(H) <: Symmetric ? PQPData(c0, c, F, H.data, A, B, θ) :
-      PQPData(c0, c, F, H, A, B, θ)
+      typeof(H) <: Symmetric ? PQPData(c0, c, F, H.data, A, B, θ) : PQPData(c0, c, F, H, A, B, θ)
   end
 
   return ParametricQuadraticModel(
@@ -168,6 +189,7 @@ function ParametricQuadraticModel(
       islp = (nnzh == 0),
       name = name,
     ),
+    ParametricMeta{T, typeof(c)}(nnzjp, nnzhp, nparam),
     Counters(),
     data,
   )
@@ -206,7 +228,7 @@ function evaluate_at_parameter(
 
   lcon_eff = copy(pqp.meta.lcon)
   ucon_eff = copy(pqp.meta.ucon)
-  
+
   Bθ = similar(lcon_eff)
   mul!(Bθ, pqp.data.B, θ)
 
@@ -237,7 +259,7 @@ function evaluate(map::AffineMap, θ::AbstractVector)
 end
 
 """
-    evaluate_with_map(pqp::AbstractParametricQuadraticModel, M::AbstractMap)
+    evaluate_with_map(pqp::AbstractParametricQuadraticModel, M::AffineMap)
 
 Returns a QuadraticModel instance under the affine map M.
 
@@ -548,6 +570,152 @@ function NLPModels.jac_lin(
   increment!(pqp, :neval_jac_lin)
   return pqp.data.A
 end
+
+## begin parameter sensitivity functions
+
+function NLPModels.jac_param_structure!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    rows::AbstractVector{<:Integer},
+    cols::AbstractVector{<:Integer},
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCOO}
+    @lencheck pqp.pmeta.nnzjp rows cols
+    rows .= pqp.data.B.rows
+    cols .= pqp.data.B.cols
+    return rows, cols
+  end
+  
+  function NLPModels.jac_param_structure!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    rows::AbstractVector{<:Integer},
+    cols::AbstractVector{<:Integer},
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCSC}
+    @lencheck pqp.pmeta.nnzjp rows cols
+    fill_structure!(pqp.data.B, rows, cols)
+    return rows, cols
+  end
+  
+  function NLPModels.jac_param_structure!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    rows::AbstractVector{<:Integer},
+    cols::AbstractVector{<:Integer},
+  ) where {T, S, M1, M2, M3, M4 <: Matrix}
+    @lencheck pqp.pmeta.nnzjp rows cols
+    count = 1
+    for j = 1:(pqp.pmeta.nparam)
+      for i = 1:(pqp.meta.ncon)
+        rows[count] = i
+        cols[count] = j
+        count += 1
+      end
+    end
+    return rows, cols
+  end
+  
+  function NLPModels.jac_param_coord!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    θ::AbstractVector,
+    vals::AbstractVector,
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCOO}
+    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nnzjp vals
+    vals .= pqp.data.B.vals
+    return vals
+  end
+  
+  function NLPModels.jac_param_coord!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    θ::AbstractVector,
+    vals::AbstractVector,
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCSC}
+    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nnzjp vals
+    fill_coord!(pqp.data.B, vals, one(T))
+    return vals
+  end
+  
+  function NLPModels.jac_param_coord!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    θ::AbstractVector,
+    vals::AbstractVector,
+  ) where {T, S, M1, M2, M3, M4 <: Matrix}
+    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nnzjp vals
+    count = 1
+    for j = 1:(pqp.pmeta.nparam)
+      for i = 1:(pqp.meta.ncon)
+        vals[count] = pqp.data.B[i, j]
+        count += 1
+      end
+    end
+    return vals
+  end
+  
+  function NLPModels.jac_param(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    θ::AbstractVector,
+  ) where {T, S, M1, M2, M3, M4 <: AbstractLinearOperator}
+    @lencheck pqp.meta.nparam θ
+    return pqp.data.B
+  end
+  
+  
+  function NLPModels.hess_param_structure!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    rows::AbstractVector{<:Integer},
+    cols::AbstractVector{<:Integer},
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCOO}
+    @lencheck pqp.pmeta.nnzhp rows cols
+    rows .= pqp.data.F.rows
+    cols .= pqp.data.F.cols
+    return rows, cols
+  end
+  
+  function NLPModels.hess_param_structure!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    rows::AbstractVector{<:Integer},
+    cols::AbstractVector{<:Integer},
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCSC}
+    @lencheck pqp.pmeta.nnzhp rows cols
+    fill_structure!(pqp.data.F, rows, cols)
+    return rows, cols
+  end
+  
+  function NLPModels.hess_param_structure!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    rows::AbstractVector{<:Integer},
+    cols::AbstractVector{<:Integer},
+  ) where {T, S, M1, M2, M3, M4 <: Matrix}
+    @lencheck pqp.pmeta.nnzhp rows cols
+    count = 1
+    for j = 1:(pqp.pmeta.nparam)
+      for i = 1:(pqp.meta.nvar)
+        rows[count] = i
+        cols[count] = j
+        count += 1
+      end
+    end
+    return rows, cols
+  end
+  
+  function NLPModels.hess_param_coord!(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    θ::AbstractVector,
+    vals::AbstractVector,
+  ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCOO}
+    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nnzhp vals
+    vals .= pqp.data.F.vals
+    return vals
+  end
+  
+  
+  function NLPModels.hess_param(
+    pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
+    θ::AbstractVector,
+  ) where {T, S, M1, M2, M3, M4 <: AbstractLinearOperator}
+    @lencheck pqp.meta.nparam θ
+    return pqp.data.F
+  end
 
 # below can be removed if PQM is made to be a subtype of AbstractQM
 

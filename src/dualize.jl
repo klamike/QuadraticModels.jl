@@ -98,6 +98,6 @@ function dualize(pqp::AbstractParametricQuadraticModel{T, S}; skip_adding_equali
     lvar = fill!(typeof(pqp.data.lvar)(undef, n′), zero(T)),
     uvar = fill!(typeof(pqp.data.uvar)(undef, n′), Inf),
     c0 = -pqp.data.c0,
-    name = "Dual of $(pqp.meta.name)",
+    name = "Dual of $(pqp.meta.name)",  # FIXME  no name?
   )
 end

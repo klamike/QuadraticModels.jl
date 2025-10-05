@@ -28,7 +28,7 @@ import NLPModelsModifiers: SlackModel, slack_meta
 import Base.convert
 
 export AbstractQuadraticModel, QuadraticModel, presolve, postsolve, postsolve!, QMSolution
-export AbstractParametricQuadraticModel, ParametricQuadraticModel, evaluate_at_parameter, evaluate_with_map, set_parameter!
+export AbstractParametricQuadraticModel, ParametricQuadraticModel, ParametricLDP, evaluate_at_parameter, evaluate_with_map, set_parameter!
 export dualize
 
 include("linalg_utils.jl")

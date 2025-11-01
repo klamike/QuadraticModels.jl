@@ -37,12 +37,11 @@ mutable struct PQPData{
   H::M2         # Hessian matrix
   A::M3         # constraint matrix for x
   B::M4         # constraint matrix for θ
-  θ::S          # current parameter value # FIXME: move to model level?
   v::S          # workspace vector 1 (nvar)
   vf::S         # workspace vector 2 (nvar)
 end
 
-@inline PQPData(c0, c, F, H, A, B, θ) = PQPData(c0, c, F, H, A, B, θ, similar(c), similar(c))
+@inline PQPData(c0, c, F, H, A, B) = PQPData(c0, c, F, H, A, B, similar(c), similar(c))
 isdense(data::PQPData{T, S, M1, M2, M3, M4}) where {T, S, M1, M2, M3, M4} =
   M1 <: DenseMatrix || M2 <: DenseMatrix || M3 <: DenseMatrix || M4 <: DenseMatrix
 
@@ -62,7 +61,7 @@ function Base.convert(
   HCOO = (M1 <: SparseMatrixCOO) ? data.H : SparseMatrixCOO(data.H)
   ACOO = (M2 <: SparseMatrixCOO) ? data.A : SparseMatrixCOO(data.A)
   BCOO = (M3 <: SparseMatrixCOO) ? data.B : SparseMatrixCOO(data.B)
-  return PQPData(data.c0, data.c, data.F, HCOO, ACOO, BCOO, data.θ)
+  return PQPData(data.c0, data.c, data.F, HCOO, ACOO, BCOO)
 end
 Base.convert(
   ::Type{PQPData{T, S, MCOO, MCOO, MCOO, MCOO}},
@@ -77,22 +76,6 @@ Base.convert(
   MCOO <: SparseMatrixCOO{T},
 } = data
 
-# TODO: move to nlpmodels
-"""
-    ParametricMeta{T, S}
-
-Metadata for parametric optimization problems containing parameter-specific information.
-
-# Fields
-- `nnzjp::Int`: number of nonzeros in the Jacobian with respect to parameters (∇ₚg)
-- `nnzhp::Int`: number of nonzeros in the Hessian with respect to parameters (∇ₓₚL)
-- `nparam::Int`: number of parameters
-"""
-struct ParametricMeta{T, S}
-  nnzjp::Int  # number of nonzeros in jac_param (∇ₚg)
-  nnzhp::Int  # number of nonzeros in hess_param (∇ₓₚL)
-  nparam::Int # number of parameters
-end
 
 abstract type AbstractParametricQuadraticModel{T, S} <: AbstractNLPModel{T, S} end
 
@@ -111,7 +94,7 @@ where θ is the parameter vector.
 mutable struct ParametricQuadraticModel{T, S, M1, M2, M3, M4} <:
                AbstractParametricQuadraticModel{T, S}
   meta::NLPModelMeta{T, S}
-  pmeta::ParametricMeta{T, S}
+  pmeta::ParametricMeta{S}
   counters::Counters
   data::PQPData{T, S, M1, M2, M3, M4}
 end
@@ -163,14 +146,14 @@ function ParametricQuadraticModel(
     nnzj = 0
     nnzjp = 0
     nnzhp = 0
-    data = PQPData(c0, c, F, H, A, B, θ)
+    data = PQPData(c0, c, F, H, A, B)
   else
     nnzh = typeof(H) <: DenseMatrix ? nvar * (nvar + 1) / 2 : nnz(H)
     nnzj = nnz(A)
     nnzjp = nnz(B)
     nnzhp = nnz(F)
     data =
-      typeof(H) <: Symmetric ? PQPData(c0, c, F, H.data, A, B, θ) : PQPData(c0, c, F, H, A, B, θ)
+      typeof(H) <: Symmetric ? PQPData(c0, c, F, H.data, A, B) : PQPData(c0, c, F, H, A, B)
   end
 
   return ParametricQuadraticModel(
@@ -189,7 +172,12 @@ function ParametricQuadraticModel(
       islp = (nnzh == 0),
       name = name,
     ),
-    ParametricMeta{T, typeof(c)}(nnzjp, nnzhp, nparam),
+    ParametricMeta{typeof(c)}(
+        θ,
+        nnzjp,
+        nnzhp,
+        nparam
+    ),
     Counters(),
     data,
   )
@@ -208,7 +196,7 @@ function set_parameter!(
   pqp::AbstractParametricQuadraticModel{T, S},
   θ::AbstractVector;
 ) where {T, S}
-  copy!(pqp.data.θ, θ)
+  copy!(pqp.pmeta.p0, θ)
 end
 
 """
@@ -248,8 +236,8 @@ function evaluate_at_parameter(
 end
 
 abstract type AbstractMap end
-struct AffineMap{MA, VB} <: AbstractMap
-  A::MA
+struct AffineMap{Mₐ, VB} <: AbstractMap
+  A::Mₐ
   b::VB
   x::VB
 end
@@ -275,8 +263,8 @@ function evaluate_with_map(
   check_bounds && error("Not implemented")
   @assert issymmetric(pqp.data.H)  # FIXME: H=(H+H')/2?
 
-  MA = M.A
-  Mb = M.b
+  Mₐ = M.A
+  β = M.b
 
   H = pqp.data.H
   c = pqp.data.c
@@ -290,15 +278,15 @@ function evaluate_with_map(
   uvar = pqp.meta.uvar
 
   # =========================
-  # Objective: substitute x = MA*θ + Mb
+  # Objective: substitute x = Mₐ*θ + β
   #   1/2 x'Hx + c'x + (Fθ)'x + c0
-  # = 1/2 θ'(MA' H MA)θ + θ'(MA'(HMb + c)) + 1/2 Mb'HMb + c'Mb
-  #   + θ'(F' MA)θ + θ'(F' Mb) + c0
+  # = 1/2 θ'(Mₐ' H Mₐ)θ + θ'(Mₐ'(Hβ + c)) + 1/2 β'Hβ + c'β
+  #   + θ'(F' Mₐ)θ + θ'(F' β) + c0
   #
   # =========================
-  H = Symmetric(MA' * H * MA + (F' * MA + MA' * F))
-  c = MA' * (H * Mb + c) + F' * Mb
-  c0 = 0.5 * (Mb' * H * Mb) + c' * Mb + pqp.data.c0
+  H = Symmetric(Mₐ' * H * Mₐ + (F' * Mₐ + Mₐ' * F))
+  c = Mₐ' * (H * β + c) + F' * β
+  c0 = 0.5 * (β' * H * β) + c' * β + pqp.data.c0
 
   # =========================
   # Constraints
@@ -306,18 +294,18 @@ function evaluate_with_map(
   #   lcon ≤ A x + B θ ≤ ucon
   #   lvar ≤ x ≤ uvar
   #
-  # Substitute x = MA θ + Mb:
-  #   lcon - A Mb ≤ (A MA + B) θ ≤ ucon - A Mb
-  #   lvar - Mb   ≤ (MA) θ     ≤ uvar - Mb
+  # Substitute x = Mₐ θ + β:
+  #   lcon - A β ≤ (A Mₐ + B) θ ≤ ucon - A β
+  #   lvar - β   ≤ (Mₐ) θ     ≤ uvar - β
   #
   # =========================
-  A1 = A * MA + B
-  l1 = lcon - A * Mb
-  u1 = ucon - A * Mb
+  A1 = A * Mₐ + B
+  l1 = lcon - A * β
+  u1 = ucon - A * β
 
-  A2 = MA
-  l2 = lvar - Mb
-  u2 = uvar - Mb
+  A2 = Mₐ
+  l2 = lvar - β
+  u2 = uvar - β
 
   Aθ = vcat(A1, A2)
   lθ = vcat(l1, l2)
@@ -344,7 +332,7 @@ function NLPModels.objgrad!(
   mul!(pqp.data.v, Symmetric(pqp.data.H, :L), x)
 
   # g ← Hx + (c+Fθ)
-  g = pqp.data.v .+ linobj(pqp, pqp.data.θ) # sets pqp.data.vf to c+Fθ
+  g = pqp.data.v .+ linobj(pqp, pqp.pmeta.p0) # sets pqp.data.vf to c+Fθ
 
   # f ← c0 + (c+Fθ)'x + (Hx)'x / 2
   f = pqp.data.c0 + dot(pqp.data.vf, x) + dot(pqp.data.v, x) / 2
@@ -359,7 +347,7 @@ function NLPModels.obj(pqp::AbstractParametricQuadraticModel{T, S}, x::AbstractV
   mul!(pqp.data.v, Symmetric(pqp.data.H, :L), x)
 
   # vf ← (c+Fθ)
-  linobj(pqp, pqp.data.θ)
+  linobj(pqp, pqp.pmeta.p0)
 
   # c0 + (c+Fθ)'x + (Hx)'x / 2
   return pqp.data.c0 + dot(pqp.data.vf, x) + dot(pqp.data.v, x) / 2
@@ -375,7 +363,7 @@ function NLPModels.grad!(
   mul!(g, Symmetric(pqp.data.H, :L), x)
   # vf ← (c+Fθ)
   copy!(pqp.data.vf, pqp.data.c)
-  mul!(pqp.data.vf, pqp.data.F, pqp.data.θ, 1, 1)
+  mul!(pqp.data.vf, pqp.data.F, pqp.pmeta.p0, 1, 1)
   # g ← H*x + (c+Fθ)
   g .+= pqp.data.vf
   return g
@@ -394,7 +382,7 @@ function NLPModels.cons_lin!(
   mul!(c, pqp.data.A, x)
 
   # c ← Bθ + Ax
-  mul!(c, pqp.data.B, pqp.data.θ, 1, 1)
+  mul!(c, pqp.data.B, pqp.pmeta.p0, 1, 1)
   return c
 end
 
@@ -616,7 +604,7 @@ function NLPModels.jac_param_structure!(
     θ::AbstractVector,
     vals::AbstractVector,
   ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCOO}
-    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nparam θ
     @lencheck pqp.pmeta.nnzjp vals
     vals .= pqp.data.B.vals
     return vals
@@ -627,7 +615,7 @@ function NLPModels.jac_param_structure!(
     θ::AbstractVector,
     vals::AbstractVector,
   ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCSC}
-    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nparam θ
     @lencheck pqp.pmeta.nnzjp vals
     fill_coord!(pqp.data.B, vals, one(T))
     return vals
@@ -638,7 +626,7 @@ function NLPModels.jac_param_structure!(
     θ::AbstractVector,
     vals::AbstractVector,
   ) where {T, S, M1, M2, M3, M4 <: Matrix}
-    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nparam θ
     @lencheck pqp.pmeta.nnzjp vals
     count = 1
     for j = 1:(pqp.pmeta.nparam)
@@ -654,7 +642,7 @@ function NLPModels.jac_param_structure!(
     pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
     θ::AbstractVector,
   ) where {T, S, M1, M2, M3, M4 <: AbstractLinearOperator}
-    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nparam θ
     return pqp.data.B
   end
   
@@ -702,7 +690,7 @@ function NLPModels.jac_param_structure!(
     θ::AbstractVector,
     vals::AbstractVector,
   ) where {T, S, M1, M2, M3, M4 <: SparseMatrixCOO}
-    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nparam θ
     @lencheck pqp.pmeta.nnzhp vals
     vals .= pqp.data.F.vals
     return vals
@@ -713,7 +701,7 @@ function NLPModels.jac_param_structure!(
     pqp::ParametricQuadraticModel{T, S, M1, M2, M3, M4},
     θ::AbstractVector,
   ) where {T, S, M1, M2, M3, M4 <: AbstractLinearOperator}
-    @lencheck pqp.meta.nparam θ
+    @lencheck pqp.pmeta.nparam θ
     return pqp.data.F
   end
 

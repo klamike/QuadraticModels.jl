@@ -271,16 +271,6 @@ end
 
 # TODO: Better hess_op
 
-function NLPModels.hess_structure!(
-  qp::QuadraticModel{T, S, M1},
-  rows::AbstractVector{<:Integer},
-  cols::AbstractVector{<:Integer},
-) where {T, S, M1 <: SparseMatrixCOO}
-  rows .= qp.data.H.rows
-  cols .= qp.data.H.cols
-  return rows, cols
-end
-
 function fill_structure!(S::SparseMatrixCSC, rows, cols)
   count = 1
   @inbounds for col = 1:size(S, 2), k = S.colptr[col]:(S.colptr[col + 1] - 1)
@@ -288,6 +278,11 @@ function fill_structure!(S::SparseMatrixCSC, rows, cols)
     cols[count] = col
     count += 1
   end
+end
+
+function fill_structure!(A::SparseMatrixCOO, rows, cols)
+  copyto!(rows, rowvals(A))
+  copyto!(cols, columns(A))
 end
 
 function fill_coord!(S::SparseMatrixCSC, vals, obj_weight)
@@ -302,7 +297,7 @@ function NLPModels.hess_structure!(
   qp::QuadraticModel{T, S, M1},
   rows::AbstractVector{<:Integer},
   cols::AbstractVector{<:Integer},
-) where {T, S, M1 <: SparseMatrixCSC}
+) where {T, S, M1}
   fill_structure!(qp.data.H, rows, cols)
   return rows, cols
 end
@@ -374,18 +369,7 @@ function NLPModels.jac_lin_structure!(
   qp::QuadraticModel{T, S, M1, M2},
   rows::AbstractVector{<:Integer},
   cols::AbstractVector{<:Integer},
-) where {T, S, M1, M2 <: SparseMatrixCOO}
-  @lencheck qp.meta.lin_nnzj rows cols
-  rows .= qp.data.A.rows
-  cols .= qp.data.A.cols
-  return rows, cols
-end
-
-function NLPModels.jac_lin_structure!(
-  qp::QuadraticModel{T, S, M1, M2},
-  rows::AbstractVector{<:Integer},
-  cols::AbstractVector{<:Integer},
-) where {T, S, M1, M2 <: SparseMatrixCSC}
+) where {T, S, M1, M2}
   @lencheck qp.meta.lin_nnzj rows cols
   fill_structure!(qp.data.A, rows, cols)
   return rows, cols

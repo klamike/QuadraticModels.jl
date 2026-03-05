@@ -31,7 +31,7 @@ for qp in [qp_problems_Matrix; qp_problems_COO]
 end
 
 include("objrhsbatchqp.jl")
-
+include("batchqp.jl")
 include("test_consistency.jl")
 
 function testSM(sm) # test function for a specific problem

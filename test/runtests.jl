@@ -30,6 +30,8 @@ for qp in [qp_problems_Matrix; qp_problems_COO]
   include(joinpath("problems", "$qp.jl"))
 end
 
+include("rhsbatchqp.jl")
+
 include("test_consistency.jl")
 
 function testSM(sm) # test function for a specific problem

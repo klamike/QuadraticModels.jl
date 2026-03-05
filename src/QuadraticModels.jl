@@ -32,5 +32,7 @@ export AbstractQuadraticModel, QuadraticModel, presolve, postsolve, postsolve!, 
 include("linalg_utils.jl")
 include("qpmodel.jl")
 include("presolve/presolve.jl")
+include("rhsbatchqp.jl")
+
 
 end # module

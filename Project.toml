@@ -20,7 +20,7 @@ QuadraticModelsQPSReaderExt = "QPSReader"
 [compat]
 LinearAlgebra = "1.10"
 LinearOperators = "2.3"
-NLPModels = "0.21.5"
+NLPModels = "0.21.10"
 NLPModelsModifiers = "0.7"
 QPSReader = "0.2.1"
 SolverCore = "0.3"

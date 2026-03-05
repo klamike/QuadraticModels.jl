@@ -1,11 +1,12 @@
-struct RHSBatchQuadraticModel{T, S, M1, M2, MT} <: NLPModels.AbstractBatchNLPModel{T, MT}
+struct ObjRHSBatchQuadraticModel{T, S, M1, M2, MT} <: NLPModels.AbstractBatchNLPModel{T, MT}
   meta::NLPModels.BatchNLPModelMeta{T, MT}
   data::QPData{T, S, M1, M2}
+  c_batch::MT   # nvar × nbatch
   _HX::MT
   _AX::MT
 end
 
-function RHSBatchQuadraticModel(
+function ObjRHSBatchQuadraticModel(
   qp::QuadraticModel{T, S, M1, M2},
   nbatch::Int;
   MT = typeof(similar(qp.data.c, T, 0, 0)),
@@ -14,7 +15,8 @@ function RHSBatchQuadraticModel(
   uvar = fill!(MT(undef, qp.meta.nvar, nbatch), T(Inf)),
   lcon = fill!(MT(undef, qp.meta.ncon, nbatch), T(-Inf)),
   ucon = fill!(MT(undef, qp.meta.ncon, nbatch), T(Inf)),
-  name::String = "RHSBatchQP",
+  c = copyto!(MT(undef, qp.meta.nvar, nbatch), repeat(qp.data.c, 1, nbatch)),
+  name::String = "ObjRHSBatchQP",
 ) where {T, S, M1, M2}
   nvar = qp.meta.nvar
   ncon = qp.meta.ncon
@@ -35,44 +37,45 @@ function RHSBatchQuadraticModel(
   )
   _HX = MT(undef, nvar, nbatch)
   _AX = MT(undef, ncon, nbatch)
-  return RHSBatchQuadraticModel{T, S, M1, M2, MT}(meta, qp.data, _HX, _AX)
+  return ObjRHSBatchQuadraticModel{T, S, M1, M2, MT}(meta, qp.data, c, _HX, _AX)
 end
 
-function RHSBatchQuadraticModel(
+function ObjRHSBatchQuadraticModel(
   qps::Vector{QP};
-  name::String = "RHSBatchQP",
+  name::String = "ObjRHSBatchQP",
   MT = typeof(similar(first(qps).data.c, T, 0, 0)),
 ) where {QP <: QuadraticModel{T, S, M1, M2}} where {T, S, M1, M2}
   nbatch = length(qps)
   qp1 = first(qps)
-  x0 = reduce(hcat, [qp.meta.x0 for qp in qps])
+  x0   = reduce(hcat, [qp.meta.x0   for qp in qps])
   lvar = reduce(hcat, [qp.meta.lvar for qp in qps])
   uvar = reduce(hcat, [qp.meta.uvar for qp in qps])
   lcon = reduce(hcat, [qp.meta.lcon for qp in qps])
   ucon = reduce(hcat, [qp.meta.ucon for qp in qps])
-  return RHSBatchQuadraticModel(qp1, nbatch; x0 = x0, lvar = lvar, uvar = uvar, lcon = lcon, ucon = ucon, name = name, MT = MT)
+  c    = reduce(hcat, [qp.data.c    for qp in qps])
+  return ObjRHSBatchQuadraticModel(qp1, nbatch; x0 = x0, lvar = lvar, uvar = uvar, lcon = lcon, ucon = ucon, c = c, name = name, MT = MT)
 end
 
-function NLPModels.obj!(bqp::RHSBatchQuadraticModel{T}, bx::AbstractMatrix, bf::AbstractVector) where T
+function NLPModels.obj!(bqp::ObjRHSBatchQuadraticModel{T}, bx::AbstractMatrix, bf::AbstractVector) where T
   H = Symmetric(bqp.data.H, :L)
   mul!(bqp._HX, H, bx)
-  bf .= bqp.data.c0 .+ vec(bqp.data.c' * bx) .+ T(0.5) .* vec(sum(bx .* bqp._HX, dims=1))
+  bf .= bqp.data.c0 .+ vec(sum(bqp.c_batch .* bx, dims=1)) .+ T(0.5) .* vec(sum(bx .* bqp._HX, dims=1))
   return bf
 end
 
-function NLPModels.grad!(bqp::RHSBatchQuadraticModel{T}, bx::AbstractMatrix, bg::AbstractMatrix) where T
+function NLPModels.grad!(bqp::ObjRHSBatchQuadraticModel{T}, bx::AbstractMatrix, bg::AbstractMatrix) where T
   mul!(bg, Symmetric(bqp.data.H, :L), bx)
-  bg .+= bqp.data.c
+  bg .+= bqp.c_batch
   return bg
 end
 
-function NLPModels.cons!(bqp::RHSBatchQuadraticModel{T}, bx::AbstractMatrix, bc::AbstractMatrix) where T
+function NLPModels.cons!(bqp::ObjRHSBatchQuadraticModel{T}, bx::AbstractMatrix, bc::AbstractMatrix) where T
   mul!(bc, bqp.data.A, bx)
   return bc
 end
 
 function NLPModels.jac_structure!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   jrows::AbstractVector{<:Integer},
   jcols::AbstractVector{<:Integer},
 ) where {T, S, M1, M2 <: SparseMatrixCOO}
@@ -83,7 +86,7 @@ function NLPModels.jac_structure!(
 end
 
 function NLPModels.jac_structure!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   jrows::AbstractVector{<:Integer},
   jcols::AbstractVector{<:Integer},
 ) where {T, S, M1, M2 <: SparseMatrixCSC}
@@ -93,7 +96,7 @@ function NLPModels.jac_structure!(
 end
 
 function NLPModels.jac_structure!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   jrows::AbstractVector{<:Integer},
   jcols::AbstractVector{<:Integer},
 ) where {T, S, M1, M2 <: Matrix}
@@ -110,7 +113,7 @@ function NLPModels.jac_structure!(
 end
 
 function NLPModels.jac_coord!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   bx::AbstractMatrix,
   bjvals::AbstractMatrix,
 ) where {T, S, M1, M2 <: SparseMatrixCOO}
@@ -119,7 +122,7 @@ function NLPModels.jac_coord!(
 end
 
 function NLPModels.jac_coord!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   bx::AbstractMatrix,
   bjvals::AbstractMatrix,
 ) where {T, S, M1, M2 <: SparseMatrixCSC}
@@ -128,7 +131,7 @@ function NLPModels.jac_coord!(
 end
 
 function NLPModels.jac_coord!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   bx::AbstractMatrix,
   bjvals::AbstractMatrix,
 ) where {T, S, M1, M2 <: Matrix}
@@ -136,18 +139,18 @@ function NLPModels.jac_coord!(
   return bjvals
 end
 
-function NLPModels.jprod!(bqp::RHSBatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJv::AbstractMatrix) where T
+function NLPModels.jprod!(bqp::ObjRHSBatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJv::AbstractMatrix) where T
   mul!(bJv, bqp.data.A, bv)
   return bJv
 end
 
-function NLPModels.jtprod!(bqp::RHSBatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJtv::AbstractMatrix) where T
+function NLPModels.jtprod!(bqp::ObjRHSBatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJtv::AbstractMatrix) where T
   mul!(bJtv, transpose(bqp.data.A), bv)
   return bJtv
 end
 
 function NLPModels.hess_structure!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   hrows::AbstractVector{<:Integer},
   hcols::AbstractVector{<:Integer},
 ) where {T, S, M1 <: SparseMatrixCOO, M2}
@@ -157,7 +160,7 @@ function NLPModels.hess_structure!(
 end
 
 function NLPModels.hess_structure!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   hrows::AbstractVector{<:Integer},
   hcols::AbstractVector{<:Integer},
 ) where {T, S, M1 <: SparseMatrixCSC, M2}
@@ -166,7 +169,7 @@ function NLPModels.hess_structure!(
 end
 
 function NLPModels.hess_structure!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   hrows::AbstractVector{<:Integer},
   hcols::AbstractVector{<:Integer},
 ) where {T, S, M1 <: Matrix, M2}
@@ -182,7 +185,7 @@ function NLPModels.hess_structure!(
 end
 
 function NLPModels.hess_coord!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   bx::AbstractMatrix,
   by::AbstractMatrix,
   bobj_weight::AbstractVector,
@@ -193,7 +196,7 @@ function NLPModels.hess_coord!(
 end
 
 function NLPModels.hess_coord!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   bx::AbstractMatrix,
   by::AbstractMatrix,
   bobj_weight::AbstractVector,
@@ -207,7 +210,7 @@ function NLPModels.hess_coord!(
 end
 
 function NLPModels.hess_coord!(
-  bqp::RHSBatchQuadraticModel{T, S, M1, M2},
+  bqp::ObjRHSBatchQuadraticModel{T, S, M1, M2},
   bx::AbstractMatrix,
   by::AbstractMatrix,
   bobj_weight::AbstractVector,
@@ -225,7 +228,7 @@ function NLPModels.hess_coord!(
   return bhvals
 end
 
-function NLPModels.hprod!(bqp::RHSBatchQuadraticModel{T}, bx::AbstractMatrix, by::AbstractMatrix, bv::AbstractMatrix, bobj_weight::AbstractVector, bHv::AbstractMatrix) where T
+function NLPModels.hprod!(bqp::ObjRHSBatchQuadraticModel{T}, bx::AbstractMatrix, by::AbstractMatrix, bv::AbstractMatrix, bobj_weight::AbstractVector, bHv::AbstractMatrix) where T
   mul!(bHv, Symmetric(bqp.data.H, :L), bv)
   bHv .*= bobj_weight'
   return bHv

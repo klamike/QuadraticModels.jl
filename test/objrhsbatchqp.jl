@@ -1,4 +1,4 @@
-@testset "RHSBatchQuadraticModel" begin
+@testset "ObjRHSBatchQuadraticModel" begin
   qp = ineqconqp_QP()
   nvar = qp.meta.nvar
   ncon = qp.meta.ncon
@@ -26,10 +26,15 @@
     qp.meta.ucon .+ 0.2,
     qp.meta.ucon .+ 0.3,
   ]
+  c_batches = [
+    copy(qp.data.c),
+    qp.data.c .+ 0.1,
+    qp.data.c .- 0.2,
+  ]
 
   models = [
     QuadraticModel(
-      qp.data.c,
+      c_batches[i],
       qp.data.H.rows,
       qp.data.H.cols,
       qp.data.H.vals;
@@ -49,9 +54,10 @@
   buvar = reduce(hcat, uvar_batches)
   blcon = reduce(hcat, lcon_batches)
   bucon = reduce(hcat, ucon_batches)
+  bc    = reduce(hcat, c_batches)
   bx0 = reduce(hcat, [models[i].meta.x0 for i in 1:nbatch])
 
-  bqp = QuadraticModels.RHSBatchQuadraticModel(
+  bqp = QuadraticModels.ObjRHSBatchQuadraticModel(
     qp,
     nbatch;
     x0 = bx0,
@@ -59,12 +65,14 @@
     uvar = buvar,
     lcon = blcon,
     ucon = bucon,
-    name = "RHSBatchQP",
+    c = bc,
+    name = "ObjRHSBatchQP",
   )
 
   @test bqp.meta.nbatch == nbatch
   @test bqp.meta.nvar == nvar
   @test bqp.meta.ncon == ncon
+  @test bqp.c_batch == bc
 
   xs = [[1.0, 2.0], [0.5, 1.5], [-0.5, 1.0]]
   ys = [[-1.0, -2.0, 0.5], [-0.5, -1.0, 0.0], [0.0, 0.5, 1.0]]
@@ -74,7 +82,7 @@
 
   bf = NLPModels.obj(bqp, bx)
   bg = NLPModels.grad(bqp, bx)
-  bc = NLPModels.cons(bqp, bx)
+  bc_cons = NLPModels.cons(bqp, bx)
   bjvals = NLPModels.jac_coord(bqp, bx)
   bhvals = NLPModels.hess_coord(bqp, bx, by, bobj_weight)
   bJv = NLPModels.jprod(bqp, bx, bx)
@@ -86,7 +94,7 @@
   for i in 1:nbatch
     @test bf[i] ≈ obj(models[i], xs[i])
     @test bg[:, i] ≈ grad(models[i], xs[i])
-    @test bc[:, i] ≈ cons(models[i], xs[i])
+    @test bc_cons[:, i] ≈ cons(models[i], xs[i])
     @test bjvals[:, i] ≈ jac_coord(models[i], xs[i])
     @test bhvals[:, i] ≈
           hess_coord(models[i], xs[i], ys[i]; obj_weight = bobj_weight[i])
@@ -103,7 +111,7 @@
     @test hcols == hcolsi
   end
 
-  bqp2 = QuadraticModels.RHSBatchQuadraticModel(models; name = "RHSBatchQP_from_vector")
+  bqp2 = QuadraticModels.ObjRHSBatchQuadraticModel(models; name = "ObjRHSBatchQP_from_vector")
   @test bqp2.meta.nbatch == nbatch
   @test bqp2.meta.nvar == nvar
   @test bqp2.meta.ncon == ncon
@@ -112,12 +120,13 @@
   @test bqp2.meta.uvar == buvar
   @test bqp2.meta.lcon == blcon
   @test bqp2.meta.ucon == bucon
+  @test bqp2.c_batch == bc
   @test NLPModels.obj(bqp2, bx) ≈ NLPModels.obj(bqp, bx)
   @test NLPModels.cons(bqp2, bx) ≈ NLPModels.cons(bqp, bx)
 
 end
 
-@testset "Dense RHSBatchQuadraticModel" begin
+@testset "Dense ObjRHSBatchQuadraticModel" begin
   c_dense = [-1.0; -2.0; -3.0]
   H_dense = [2.0 1.0 0.5; 1.0 3.0 1.0; 0.5 1.0 4.0]   # symmetric, pass lower tri
   A_dense = [1.0 2.0 0.5; 0.5 1.0 2.0]
@@ -151,10 +160,11 @@ end
   ucon_batches = [ucon_base, ucon_base .+ 0.2, ucon_base .+ 0.3]
   lvar_batches = [lvar_base, lvar_base .- 0.5, lvar_base .+ 0.5]
   uvar_batches = [uvar_base, uvar_base .+ 1.0, uvar_base .+ 2.0]
+  c_batches = [c_dense, c_dense .+ 0.1, c_dense .- 0.2]
 
   models = [
     QuadraticModel(
-      c_dense,
+      c_batches[i],
       tril(H_dense),
       A = A_dense,
       lcon = lcon_batches[i],
@@ -170,9 +180,10 @@ end
   buvar = reduce(hcat, uvar_batches)
   blcon = reduce(hcat, lcon_batches)
   bucon = reduce(hcat, ucon_batches)
+  bc    = reduce(hcat, c_batches)
   bx0 = reduce(hcat, [models[i].meta.x0 for i in 1:nbatch])
 
-  bqp = QuadraticModels.RHSBatchQuadraticModel(
+  bqp = QuadraticModels.ObjRHSBatchQuadraticModel(
     qp_dense,
     nbatch;
     x0 = bx0,
@@ -180,7 +191,8 @@ end
     uvar = buvar,
     lcon = blcon,
     ucon = bucon,
-    name = "RHSBatchQP_dense",
+    c = bc,
+    name = "ObjRHSBatchQP_dense",
   )
 
   @test bqp.meta.nbatch == nbatch
@@ -188,6 +200,7 @@ end
   @test bqp.meta.ncon == ncon
   @test bqp.meta.nnzj == nnzj
   @test bqp.meta.nnzh == nnzh
+  @test bqp.c_batch == bc
 
   xs = [[1.0, 2.0, 0.5], [0.5, 1.5, -0.5], [-0.5, 1.0, 1.0]]
   ys = [[-1.0, 0.5], [-0.5, 0.0], [0.0, 1.0]]
@@ -197,7 +210,7 @@ end
 
   bf = NLPModels.obj(bqp, bx)
   bg = NLPModels.grad(bqp, bx)
-  bc = NLPModels.cons(bqp, bx)
+  bc_cons = NLPModels.cons(bqp, bx)
   bjvals = NLPModels.jac_coord(bqp, bx)
   bhvals = NLPModels.hess_coord(bqp, bx, by, bobj_weight)
   bJv = NLPModels.jprod(bqp, bx, bx)
@@ -209,7 +222,7 @@ end
   for i in 1:nbatch
     @test bf[i] ≈ obj(models[i], xs[i])
     @test bg[:, i] ≈ grad(models[i], xs[i])
-    @test bc[:, i] ≈ cons(models[i], xs[i])
+    @test bc_cons[:, i] ≈ cons(models[i], xs[i])
     @test bjvals[:, i] ≈ jac_coord(models[i], xs[i])
     @test bhvals[:, i] ≈ hess_coord(models[i], xs[i], ys[i]; obj_weight = bobj_weight[i])
     @test bJv[:, i] ≈ jprod(models[i], xs[i], xs[i])

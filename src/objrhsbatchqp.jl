@@ -33,6 +33,7 @@ function ObjRHSBatchQuadraticModel(
     ucon = ucon,
     nnzj = nnzj,
     nnzh = nnzh,
+    islp = (nnzh == 0),
     name = name,
   )
   _HX = MT(undef, nvar, nbatch)

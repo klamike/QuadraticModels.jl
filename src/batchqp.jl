@@ -24,6 +24,8 @@ struct BatchQuadraticModel{T, MT, SpMT_J, SpMT_H, VT<:AbstractVector{T}, VI<:Abs
 
   # Workspace
   _HX::MT               # nvar × nbatch (for Hx in obj!/grad!)
+  _jac_buffer::MT        # nnzj × nbatch
+  _hess_buffer::MT       # sym_nnzh × nbatch
 end
 
 """
@@ -110,6 +112,8 @@ function BatchQuadraticModel(
   VT = typeof(c0_batch)
   VI = typeof(hess_rows)
   _HX = fill!(MT(undef, nvar, nbatch), zero(T))
+  _jac_buffer = fill!(MT(undef, nnzj, nbatch), zero(T))
+  _hess_buffer = fill!(MT(undef, sym_nnzh, nbatch), zero(T))
 
   return BatchQuadraticModel{T, MT, SpMT_J, SpMT_H, VT, VI}(
     meta,
@@ -117,26 +121,27 @@ function BatchQuadraticModel(
     hess_rows, hess_cols,
     _jac_scatter, _jact_scatter, _hess_scatter,
     sym_gather_cols, sym_nz_idx,
-    _HX,
+    _HX, _jac_buffer, _hess_buffer,
   )
 end
 
 function NLPModels.obj!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bf::AbstractVector) where T
-  sym_vals = bqp.H_nzvals[bqp._hess_sym_nzidx, :]
-  mul!(bqp._HX, bqp._hess_scatter, sym_vals .* bx[bqp._hess_sym_gather_cols, :])
+  @views bqp._hess_buffer .= bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bx[bqp._hess_sym_gather_cols, :]
+  mul!(bqp._HX, bqp._hess_scatter, bqp._hess_buffer)
   bf .= bqp.c0_batch .+ vec(sum(bqp.c_batch .* bx, dims=1)) .+ T(0.5) .* vec(sum(bx .* bqp._HX, dims=1))
   return bf
 end
 
 function NLPModels.grad!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bg::AbstractMatrix) where T
-  sym_vals = bqp.H_nzvals[bqp._hess_sym_nzidx, :]
-  mul!(bg, bqp._hess_scatter, sym_vals .* bx[bqp._hess_sym_gather_cols, :])
+  @views bqp._hess_buffer .= bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bx[bqp._hess_sym_gather_cols, :]
+  mul!(bg, bqp._hess_scatter, bqp._hess_buffer)
   bg .+= bqp.c_batch
   return bg
 end
 
 function NLPModels.cons!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bc::AbstractMatrix) where T
-  mul!(bc, bqp._jac_scatter, bqp.A_nzvals .* bx[rowvals(bqp._jact_scatter), :])
+  @views bqp._jac_buffer .= bqp.A_nzvals .* bx[rowvals(bqp._jact_scatter), :]
+  mul!(bc, bqp._jac_scatter, bqp._jac_buffer)
   return bc
 end
 
@@ -161,12 +166,14 @@ function NLPModels.jac_coord!(
 end
 
 function NLPModels.jprod!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJv::AbstractMatrix) where T
-  mul!(bJv, bqp._jac_scatter, bqp.A_nzvals .* bv[rowvals(bqp._jact_scatter), :])
+  @views bqp._jac_buffer .= bqp.A_nzvals .* bv[rowvals(bqp._jact_scatter), :]
+  mul!(bJv, bqp._jac_scatter, bqp._jac_buffer)
   return bJv
 end
 
 function NLPModels.jtprod!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJtv::AbstractMatrix) where T
-  mul!(bJtv, bqp._jact_scatter, bqp.A_nzvals .* bv[rowvals(bqp._jac_scatter), :])
+  @views bqp._jac_buffer .= bqp.A_nzvals .* bv[rowvals(bqp._jac_scatter), :]
+  mul!(bJtv, bqp._jact_scatter, bqp._jac_buffer)
   return bJtv
 end
 
@@ -192,7 +199,7 @@ function NLPModels.hess_coord!(
 end
 
 function NLPModels.hprod!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, by::AbstractMatrix, bv::AbstractMatrix, bobj_weight::AbstractVector, bHv::AbstractMatrix) where T
-  sym_vals = bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bobj_weight'
-  mul!(bHv, bqp._hess_scatter, sym_vals .* bv[bqp._hess_sym_gather_cols, :])
+  @views bqp._hess_buffer .= bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bobj_weight' .* bv[bqp._hess_sym_gather_cols, :]
+  mul!(bHv, bqp._hess_scatter, bqp._hess_buffer)
   return bHv
 end

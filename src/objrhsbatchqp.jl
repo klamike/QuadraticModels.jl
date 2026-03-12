@@ -192,7 +192,7 @@ function NLPModels.hess_coord!(
   bobj_weight::AbstractVector,
   bhvals::AbstractMatrix,
 ) where {T, S, M1 <: SparseMatrixCOO, M2}
-  bhvals .= bqp.data.H.vals .* bobj_weight'
+  mul!(bhvals, bqp.data.H.vals, bobj_weight')
   return bhvals
 end
 
@@ -206,7 +206,7 @@ function NLPModels.hess_coord!(
   H = bqp.data.H
   nnzh = nnz(H)
   nnzh == 0 && return bhvals
-  bhvals .= H.nzval .* bobj_weight'
+  mul!(bhvals, H.nzVal, bobj_weight')
   return bhvals
 end
 

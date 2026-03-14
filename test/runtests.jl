@@ -30,6 +30,8 @@ for qp in [qp_problems_Matrix; qp_problems_COO]
   include(joinpath("problems", "$qp.jl"))
 end
 
+include("linear_parametric_qp.jl")
+include("batch_linear_parametric_qp.jl")
 include("objrhsbatchqp.jl")
 include("batchqp.jl")
 include("test_consistency.jl")

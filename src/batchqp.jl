@@ -1,11 +1,13 @@
 """
-    BatchQuadraticModel{T, MT, SpMT_J, SpMT_H, VT, VI}
+    BatchQuadraticModel{T, MT, VT, VI}
 
 Batch quadratic model where all instances share the same sparsity structure
 but may have different QP data (linear cost `c`, constraint matrix `A` values,
 Hessian `H` values, constant `c0`, and bounds).
+
+Uses fused gather-scatter operations instead of sparse scatter matrices.
 """
-struct BatchQuadraticModel{T, MT, SpMT_J, SpMT_H, VT<:AbstractVector{T}, VI<:AbstractVector{Int}} <: NLPModels.AbstractBatchNLPModel{T, MT}
+struct BatchQuadraticModel{T, MT, VT<:AbstractVector{T}, VI<:AbstractVector{Int}} <: NLPModels.AbstractBatchNLPModel{T, MT}
   meta::NLPModels.BatchNLPModelMeta{T, MT}
   c_batch::MT           # nvar × nbatch
   c0_batch::VT          # nbatch
@@ -14,18 +16,29 @@ struct BatchQuadraticModel{T, MT, SpMT_J, SpMT_H, VT<:AbstractVector{T}, VI<:Abs
 
   hess_rows::VI
   hess_cols::VI
+  A_rows::VI
+  A_cols::VI
 
-  _jac_scatter::SpMT_J    # ncon × nnzj:  S[rows[k], k] = 1
-  _jact_scatter::SpMT_J   # nvar × nnzj:  S[cols[k], k] = 1
-  _hess_scatter::SpMT_H   # nvar × sym_nnzh: handles lower-tri symmetrization
+  # Jac gather-scatter: cons! / jprod! (A * v, group by A_rows → ncon output)
+  _jac_gs_rowptr::VI
+  _jac_gs_colidx::VI
+  _jac_nz_map::VI         # identity 1:nnzj
+  _jac_val_map::VI        # A_cols
 
-  _hess_sym_gather_cols::VI   # column indices for V gather
-  _hess_sym_nzidx::VI         # indices into H_nzvals rows
+  # Jac transpose gather-scatter: jtprod! (A' * v, group by A_cols → nvar output)
+  _jact_gs_rowptr::VI
+  _jact_gs_colidx::VI
+  _jact_nz_map::VI        # identity 1:nnzj
+  _jact_val_map::VI       # A_rows
+
+  # Hess gather-scatter: symmetric H*v (group by sym_rows → nvar output)
+  _hess_gs_rowptr::VI
+  _hess_gs_colidx::VI
+  _hess_nz_map::VI        # sym_nzidx (maps to H_nzvals rows)
+  _hess_val_map::VI       # sym_gather_cols (maps to x/v rows)
 
   # Workspace
-  _HX::MT               # nvar × nbatch (for Hx in obj!/grad!)
-  _jac_buffer::MT        # nnzj × nbatch
-  _hess_buffer::MT       # sym_nnzh × nbatch
+  _HX::MT               # nvar × nbatch
 end
 
 """
@@ -88,60 +101,64 @@ function BatchQuadraticModel(
     copyto!(view(H_nzvals, :, i), nonzeros(qp.data.H))
   end
 
-  jac_rows_dev = similar(c_batch, Int, nnzj)
-  jac_cols_dev = similar(c_batch, Int, nnzj)
-  fill_structure!(qp1.data.A, jac_rows_dev, jac_cols_dev)
-  scat_vals = fill!(similar(c_batch, T, nnzj), one(T))
-  scat_idx  = similar(c_batch, Int, nnzj); scat_idx .= 1:nnzj
-  _jac_scatter  = sparse(jac_rows_dev, scat_idx, scat_vals, ncon, nnzj)
-  _jact_scatter = sparse(jac_cols_dev, scat_idx, scat_vals, nvar, nnzj)
+  # Extract A structure
+  A_rows_vec = similar(c_batch, Int, nnzj)
+  A_cols_vec = similar(c_batch, Int, nnzj)
+  fill_structure!(qp1.data.A, A_rows_vec, A_cols_vec)
 
+  # Jac gather-scatter (A * v → ncon): group by A_rows
+  jac_identity = collect(1:nnzj)
+  jac_gs_rowptr, jac_gs_colidx = _coo_to_csr(Vector{Int}(A_rows_vec), ncon)
+  jac_val_map = Vector{Int}(A_cols_vec)
+
+  # Jac transpose gather-scatter (A' * v → nvar): group by A_cols
+  jact_gs_rowptr, jact_gs_colidx = _coo_to_csr(Vector{Int}(A_cols_vec), nvar)
+  jact_val_map = Vector{Int}(A_rows_vec)
+
+  # Hess symmetric gather-scatter
   off_diag = findall(hess_rows .!= hess_cols)
-  sym_scatter_rows = vcat(hess_rows, hess_cols[off_diag])
-  sym_gather_cols  = vcat(hess_cols, hess_rows[off_diag])
-  base_idx = similar(c_batch, Int, nnzh); base_idx .= 1:nnzh
-  sym_nz_idx = vcat(base_idx, off_diag)
+  sym_scatter_rows = vcat(Vector{Int}(hess_rows), Vector{Int}(hess_cols[off_diag]))
+  base_idx = collect(1:nnzh)
+  sym_nz_idx = vcat(base_idx, Vector{Int}(off_diag))
+  sym_gather_cols = vcat(Vector{Int}(hess_cols), Vector{Int}(hess_rows[off_diag]))
   sym_nnzh = nnzh + length(off_diag)
 
-  sym_idx  = similar(c_batch, Int, sym_nnzh); sym_idx .= 1:sym_nnzh
-  sym_vals = fill!(similar(c_batch, T, sym_nnzh), one(T))
-  _hess_scatter = sparse(sym_scatter_rows, sym_idx, sym_vals, nvar, sym_nnzh)
+  hess_gs_rowptr, hess_gs_colidx = _coo_to_csr(sym_scatter_rows, nvar)
+  hess_nz_map = sym_nz_idx
+  hess_val_map = sym_gather_cols
 
-  SpMT_J = typeof(_jac_scatter)
-  SpMT_H = typeof(_hess_scatter)
   VT = typeof(c0_batch)
   VI = typeof(hess_rows)
   _HX = fill!(MT(undef, nvar, nbatch), zero(T))
-  _jac_buffer = fill!(MT(undef, nnzj, nbatch), zero(T))
-  _hess_buffer = fill!(MT(undef, sym_nnzh, nbatch), zero(T))
 
-  return BatchQuadraticModel{T, MT, SpMT_J, SpMT_H, VT, VI}(
+  return BatchQuadraticModel{T, MT, VT, VI}(
     meta,
     c_batch, c0_batch, H_nzvals, A_nzvals,
-    hess_rows, hess_cols,
-    _jac_scatter, _jact_scatter, _hess_scatter,
-    sym_gather_cols, sym_nz_idx,
-    _HX, _jac_buffer, _hess_buffer,
+    hess_rows, hess_cols, A_rows_vec, A_cols_vec,
+    jac_gs_rowptr, jac_gs_colidx, jac_identity, jac_val_map,
+    jact_gs_rowptr, jact_gs_colidx, copy(jac_identity), jact_val_map,
+    hess_gs_rowptr, hess_gs_colidx, hess_nz_map, hess_val_map,
+    _HX,
   )
 end
 
 function NLPModels.obj!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bf::AbstractVector) where T
-  @views bqp._hess_buffer .= bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bx[bqp._hess_sym_gather_cols, :]
-  mul!(bqp._HX, bqp._hess_scatter, bqp._hess_buffer)
+  _gather_scatter!(bqp._HX, bqp.H_nzvals, bqp._hess_nz_map, bx, bqp._hess_val_map,
+                    bqp._hess_gs_rowptr, bqp._hess_gs_colidx)
   bf .= bqp.c0_batch .+ vec(sum(bqp.c_batch .* bx, dims=1)) .+ T(0.5) .* vec(sum(bx .* bqp._HX, dims=1))
   return bf
 end
 
 function NLPModels.grad!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bg::AbstractMatrix) where T
-  @views bqp._hess_buffer .= bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bx[bqp._hess_sym_gather_cols, :]
-  mul!(bg, bqp._hess_scatter, bqp._hess_buffer)
+  _gather_scatter!(bg, bqp.H_nzvals, bqp._hess_nz_map, bx, bqp._hess_val_map,
+                    bqp._hess_gs_rowptr, bqp._hess_gs_colidx)
   bg .+= bqp.c_batch
   return bg
 end
 
 function NLPModels.cons!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bc::AbstractMatrix) where T
-  @views bqp._jac_buffer .= bqp.A_nzvals .* bx[rowvals(bqp._jact_scatter), :]
-  mul!(bc, bqp._jac_scatter, bqp._jac_buffer)
+  _gather_scatter!(bc, bqp.A_nzvals, bqp._jac_nz_map, bx, bqp._jac_val_map,
+                    bqp._jac_gs_rowptr, bqp._jac_gs_colidx)
   return bc
 end
 
@@ -151,8 +168,8 @@ function NLPModels.jac_structure!(
   jcols::AbstractVector{<:Integer},
 )
   @lencheck bqp.meta.nnzj jrows jcols
-  copyto!(jrows, rowvals(bqp._jac_scatter))
-  copyto!(jcols, rowvals(bqp._jact_scatter))
+  copyto!(jrows, bqp.A_rows)
+  copyto!(jcols, bqp.A_cols)
   return jrows, jcols
 end
 
@@ -166,14 +183,14 @@ function NLPModels.jac_coord!(
 end
 
 function NLPModels.jprod!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJv::AbstractMatrix) where T
-  @views bqp._jac_buffer .= bqp.A_nzvals .* bv[rowvals(bqp._jact_scatter), :]
-  mul!(bJv, bqp._jac_scatter, bqp._jac_buffer)
+  _gather_scatter!(bJv, bqp.A_nzvals, bqp._jac_nz_map, bv, bqp._jac_val_map,
+                    bqp._jac_gs_rowptr, bqp._jac_gs_colidx)
   return bJv
 end
 
 function NLPModels.jtprod!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJtv::AbstractMatrix) where T
-  @views bqp._jac_buffer .= bqp.A_nzvals .* bv[rowvals(bqp._jac_scatter), :]
-  mul!(bJtv, bqp._jact_scatter, bqp._jac_buffer)
+  _gather_scatter!(bJtv, bqp.A_nzvals, bqp._jact_nz_map, bv, bqp._jact_val_map,
+                    bqp._jact_gs_rowptr, bqp._jact_gs_colidx)
   return bJtv
 end
 
@@ -199,7 +216,8 @@ function NLPModels.hess_coord!(
 end
 
 function NLPModels.hprod!(bqp::BatchQuadraticModel{T}, bx::AbstractMatrix, by::AbstractMatrix, bv::AbstractMatrix, bobj_weight::AbstractVector, bHv::AbstractMatrix) where T
-  @views bqp._hess_buffer .= bqp.H_nzvals[bqp._hess_sym_nzidx, :] .* bobj_weight' .* bv[bqp._hess_sym_gather_cols, :]
-  mul!(bHv, bqp._hess_scatter, bqp._hess_buffer)
+  _gather_scatter!(bHv, bqp.H_nzvals, bqp._hess_nz_map, bv, bqp._hess_val_map,
+                    bqp._hess_gs_rowptr, bqp._hess_gs_colidx)
+  bHv .*= bobj_weight'
   return bHv
 end

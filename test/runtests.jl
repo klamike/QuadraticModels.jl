@@ -32,6 +32,8 @@ end
 
 include("linear_parametric_qp.jl")
 include("batch_linear_parametric_qp.jl")
+include("parametric_qp.jl")
+include("batch_parametric_qp.jl")
 include("objrhsbatchqp.jl")
 include("batchqp.jl")
 include("test_consistency.jl")

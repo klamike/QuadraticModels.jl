@@ -17,6 +17,9 @@ QPSReader = "10f199a5-22af-520b-b891-7ce84a7b1bd0"
 [extensions]
 QuadraticModelsQPSReaderExt = "QPSReader"
 
+[sources]
+NLPModels = {rev = "mk/paramnlp", url = "https://github.com/klamike/NLPModels.jl"}
+
 [compat]
 LinearAlgebra = "1.10"
 LinearOperators = "2.3"

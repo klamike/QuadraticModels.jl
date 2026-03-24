@@ -30,9 +30,10 @@ import Base.convert
 export AbstractQuadraticModel, QuadraticModel, presolve, postsolve, postsolve!, QMSolution
 export LinearParametricQuadraticModel, BatchLinearParametricQuadraticModel
 export ParametricQuadraticModel, BatchParametricQuadraticModel
+export BatchSparseOp, batch_spmv!, batch_spmv_add!, _gather_mul!
 
 include("linalg_utils.jl")
-include("gather_scatter.jl")
+include("batch_spmv.jl")
 include("qpmodel.jl")
 include("presolve/presolve.jl")
 include("objrhsbatchqp.jl")

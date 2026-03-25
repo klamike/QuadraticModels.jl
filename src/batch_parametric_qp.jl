@@ -25,16 +25,10 @@ function BatchedSparseJac(
   if nnz_jac == 0
     empty_vi = Int[]
     nzvals = MT(undef, 0, nbatch)
-    # Empty prod op
     prod_rowptr = ones(Int, nrow + 1)
-    prod_scatter = _coo_to_scatter(Int[], nrow, 0)
-    prod_buffer = MT(undef, 0, nbatch)
-    prod_op = _build_op(prod_rowptr, empty_vi, empty_vi, empty_vi, prod_scatter, prod_buffer)
-    # Empty tprod op
+    prod_op = _build_op(nzvals, prod_rowptr, empty_vi, empty_vi, empty_vi)
     tprod_rowptr = ones(Int, ncol + 1)
-    tprod_scatter = _coo_to_scatter(Int[], ncol, 0)
-    tprod_buffer = MT(undef, 0, nbatch)
-    tprod_op = _build_op(tprod_rowptr, empty_vi, empty_vi, empty_vi, tprod_scatter, tprod_buffer)
+    tprod_op = _build_op(nzvals, tprod_rowptr, empty_vi, empty_vi, empty_vi)
     return BatchedSparseJac{T, MT, typeof(empty_vi)}(
       nrow, ncol, 0, nzvals, prod_op, tprod_op,
     )
@@ -43,19 +37,13 @@ function BatchedSparseJac(
   nzvals = fill!(MT(undef, nnz_jac, nbatch), zero(T))
   identity_map = collect(1:nnz_jac)
 
-  # Prod: group nonzeros by row → CSR
   prod_rowptr, prod_colidx = _coo_to_csr(coo.rows, nrow)
   prod_val_map = copy(coo.cols)
-  prod_scatter = _coo_to_scatter(coo.rows, nrow, nnz_jac)
-  prod_buffer = fill!(MT(undef, nnz_jac, nbatch), zero(T))
-  prod_op = _build_op(prod_rowptr, identity_map, prod_val_map, prod_colidx, prod_scatter, prod_buffer)
+  prod_op = _build_op(nzvals, prod_rowptr, identity_map, prod_val_map, prod_colidx)
 
-  # Tprod: group nonzeros by col → CSR
   tprod_rowptr, tprod_colidx = _coo_to_csr(coo.cols, ncol)
   tprod_val_map = copy(coo.rows)
-  tprod_scatter = _coo_to_scatter(coo.cols, ncol, nnz_jac)
-  tprod_buffer = fill!(MT(undef, nnz_jac, nbatch), zero(T))
-  tprod_op = _build_op(tprod_rowptr, copy(identity_map), tprod_val_map, tprod_colidx, tprod_scatter, tprod_buffer)
+  tprod_op = _build_op(nzvals, tprod_rowptr, copy(identity_map), tprod_val_map, tprod_colidx)
 
   VI = Vector{Int}
   return BatchedSparseJac{T, MT, VI}(
@@ -69,7 +57,7 @@ function bsj_prod!(result::AbstractMatrix, bsj::BatchedSparseJac, V::AbstractMat
     fill!(result, zero(eltype(result)))
     return result
   end
-  batch_spmv!(result, bsj.nzvals, V, bsj.prod_op)
+  batch_spmv!(result, bsj.prod_op, V)
   return result
 end
 
@@ -79,7 +67,7 @@ function bsj_tprod!(result::AbstractMatrix, bsj::BatchedSparseJac, V::AbstractMa
     fill!(result, zero(eltype(result)))
     return result
   end
-  batch_spmv!(result, bsj.nzvals, V, bsj.tprod_op)
+  batch_spmv!(result, bsj.tprod_op, V)
   return result
 end
 
@@ -88,7 +76,7 @@ function bsj_prod_add!(result::AbstractMatrix, bsj::BatchedSparseJac, V::Abstrac
   if bsj.nnz_jac == 0
     return result
   end
-  batch_spmv_add!(result, bsj.nzvals, V, bsj.prod_op, α)
+  batch_spmv!(result, bsj.prod_op, V, α, one(α))
   return result
 end
 
@@ -97,7 +85,7 @@ function bsj_tprod_add!(result::AbstractMatrix, bsj::BatchedSparseJac, V::Abstra
   if bsj.nnz_jac == 0
     return result
   end
-  batch_spmv_add!(result, bsj.nzvals, V, bsj.tprod_op, α)
+  batch_spmv!(result, bsj.tprod_op, V, α, one(α))
   return result
 end
 
@@ -258,16 +246,12 @@ function BatchParametricQuadraticModel(
   jac_identity = collect(1:nnzj)
   jac_rowptr, jac_colidx = _coo_to_csr(Vector{Int}(A_rows_vec), ncon)
   jac_val_map = Vector{Int}(A_cols_vec)
-  jac_scatter = _coo_to_scatter(Vector{Int}(A_rows_vec), ncon, nnzj)
-  jac_buffer = fill!(MT(undef, nnzj, nbatch), zero(T))
-  jac_op = _build_op(jac_rowptr, jac_identity, jac_val_map, jac_colidx, jac_scatter, jac_buffer)
+  jac_op = _build_op(A_nzvals, jac_rowptr, jac_identity, jac_val_map, jac_colidx)
 
   # Build jact op
   jact_rowptr, jact_colidx = _coo_to_csr(Vector{Int}(A_cols_vec), nvar)
   jact_val_map = Vector{Int}(A_rows_vec)
-  jact_scatter = _coo_to_scatter(Vector{Int}(A_cols_vec), nvar, nnzj)
-  jact_buffer = fill!(MT(undef, nnzj, nbatch), zero(T))
-  jact_op = _build_op(jact_rowptr, copy(jac_identity), jact_val_map, jact_colidx, jact_scatter, jact_buffer)
+  jact_op = _build_op(A_nzvals, jact_rowptr, copy(jac_identity), jact_val_map, jact_colidx)
 
   # Build hess symmetric op
   off_diag = findall(hess_rows .!= hess_cols)
@@ -275,12 +259,9 @@ function BatchParametricQuadraticModel(
   base_idx = collect(1:nnzh)
   sym_nz_idx = vcat(base_idx, Vector{Int}(off_diag))
   sym_gather_cols = vcat(Vector{Int}(hess_cols), Vector{Int}(hess_rows[off_diag]))
-  sym_nnz = nnzh + length(off_diag)
 
   hess_rowptr, hess_colidx = _coo_to_csr(sym_scatter_rows, nvar)
-  hess_scatter = _coo_to_scatter(sym_scatter_rows, nvar, sym_nnz)
-  hess_buffer = fill!(MT(undef, sym_nnz, nbatch), zero(T))
-  hess_op = _build_op(hess_rowptr, sym_nz_idx, sym_gather_cols, hess_colidx, hess_scatter, hess_buffer)
+  hess_op = _build_op(H_nzvals, hess_rowptr, sym_nz_idx, sym_gather_cols, hess_colidx)
 
   # Build BatchedSparseJac for each parametric Jacobian
   dc_jac = BatchedSparseJac(pqp1.dc, nbatch; MT = MT)
@@ -426,19 +407,19 @@ end
 # ── Standard NLP API (using BatchSparseOp) ──
 
 function NLPModels.obj!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractMatrix, bf::AbstractVector) where T
-  batch_spmv!(bpqp._HX, bpqp.H_nzvals, bx, bpqp.hess_op)
+  batch_spmv!(bpqp._HX, bpqp.hess_op, bx)
   bf .= bpqp.c0_batch .+ vec(sum(bpqp.c_batch .* bx, dims=1)) .+ T(0.5) .* vec(sum(bx .* bpqp._HX, dims=1))
   return bf
 end
 
 function NLPModels.grad!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractMatrix, bg::AbstractMatrix) where T
-  batch_spmv!(bg, bpqp.H_nzvals, bx, bpqp.hess_op)
+  batch_spmv!(bg, bpqp.hess_op, bx)
   bg .+= bpqp.c_batch
   return bg
 end
 
 function NLPModels.cons!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractMatrix, bc::AbstractMatrix) where T
-  batch_spmv!(bc, bpqp.A_nzvals, bx, bpqp.jac_op)
+  batch_spmv!(bc, bpqp.jac_op, bx)
   return bc
 end
 
@@ -462,12 +443,12 @@ function NLPModels.jac_coord!(
 end
 
 function NLPModels.jprod!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJv::AbstractMatrix) where T
-  batch_spmv!(bJv, bpqp.A_nzvals, bv, bpqp.jac_op)
+  batch_spmv!(bJv, bpqp.jac_op, bv)
   return bJv
 end
 
 function NLPModels.jtprod!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractMatrix, bv::AbstractMatrix, bJtv::AbstractMatrix) where T
-  batch_spmv!(bJtv, bpqp.A_nzvals, bv, bpqp.jact_op)
+  batch_spmv!(bJtv, bpqp.jact_op, bv)
   return bJtv
 end
 
@@ -493,7 +474,7 @@ function NLPModels.hess_coord!(
 end
 
 function NLPModels.hprod!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractMatrix, by::AbstractMatrix, bv::AbstractMatrix, bobj_weight::AbstractVector, bHv::AbstractMatrix) where T
-  batch_spmv!(bHv, bpqp.H_nzvals, bv, bpqp.hess_op)
+  batch_spmv!(bHv, bpqp.hess_op, bv)
   bHv .*= bobj_weight'
   return bHv
 end
@@ -527,7 +508,7 @@ function NLPModels.jpprod!(bpqp::BatchParametricQuadraticModel{T}, bx::AbstractM
   # _u_a_batch = dA * bv (nnzj × nbatch)
   bsj_prod!(bpqp._u_a_batch, bpqp.dA_jac, bv)
   # bJv[r,j] = Σ u_a[k,j] * bx[A_cols[k],j] for A_rows[k]==r
-  batch_spmv!(bJv, bpqp._u_a_batch, bx, bpqp.jac_op)
+  batch_spmv!(bJv, bpqp.jac_op, bx)
   return bJv
 end
 
@@ -562,7 +543,7 @@ function NLPModels.hpprod!(
     # _u_h_batch = dH * bv
     bsj_prod!(bpqp._u_h_batch, bpqp.dH_jac, bv)
     # Symmetric H*x scatter
-    batch_spmv!(bpqp._HX, bpqp._u_h_batch, bx, bpqp.hess_op)
+    batch_spmv!(bpqp._HX, bpqp.hess_op, bx)
     bHv .+= bpqp._HX .* bobj_weight'
   end
 
@@ -570,7 +551,7 @@ function NLPModels.hpprod!(
     # _u_a_batch = dA * bv
     bsj_prod!(bpqp._u_a_batch, bpqp.dA_jac, bv)
     # (∂A/∂θ·v)' * y
-    batch_spmv!(bpqp._HX, bpqp._u_a_batch, by, bpqp.jact_op)
+    batch_spmv!(bpqp._HX, bpqp.jact_op, by)
     bHv .+= bpqp._HX
   end
 

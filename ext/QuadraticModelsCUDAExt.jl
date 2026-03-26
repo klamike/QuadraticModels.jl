@@ -6,7 +6,7 @@ using SparseArrays
 using NLPModels
 using KernelAbstractions
 import QuadraticModels
-import QuadraticModels: _gather_mul!, _batch_spmv_impl!, BatchSparseOp,
+import QuadraticModels: _gather_mul!, _batch_spmv_impl!, _to_gpu, BatchSparseOp,
     BatchQuadraticModel, ObjRHSBatchQuadraticModel, QPData
 
 @kernel function _gather_mul_kernel!(
@@ -137,7 +137,7 @@ function _launch_warp_kernel!(
     )
 end
 
-function _cu_op(op::BatchSparseOp, nzVals_gpu::CuMatrix)
+function _to_gpu(op::BatchSparseOp, nzVals_gpu::CuMatrix)
     BatchSparseOp(
         nzVals_gpu,
         CuVector{Int32}(op.rowptr),
@@ -179,9 +179,9 @@ function Base.convert(::Type{BatchQuadraticModel{T, MT}}, bnlp::BatchQuadraticMo
         H_nzvals_gpu, A_nzvals_gpu,
         VI(bnlp.hess_rows), VI(bnlp.hess_cols),
         VI(bnlp.A_rows), VI(bnlp.A_cols),
-        _cu_op(bnlp.jac_op, A_nzvals_gpu),
-        _cu_op(bnlp.jact_op, A_nzvals_gpu),
-        _cu_op(bnlp.hess_op, H_nzvals_gpu),
+        _to_gpu(bnlp.jac_op, A_nzvals_gpu),
+        _to_gpu(bnlp.jact_op, A_nzvals_gpu),
+        _to_gpu(bnlp.hess_op, H_nzvals_gpu),
         CUDA.zeros(T, nvar, nbatch),
     )
 end

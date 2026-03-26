@@ -65,6 +65,8 @@ function _build_op(nzVals, rowptr, nz_map, val_map, colidx)
   return BatchSparseOp(nzVals, rowptr, flat_nz, flat_val, flat_packed, max_nnz, mean_nnz)
 end
 
+_to_gpu(op::BatchSparseOp, nzVals) = op
+
 function batch_spmv!(
   out::AbstractMatrix{T}, op::BatchSparseOp, B::AbstractMatrix,
   alpha::T = one(T), beta::T = zero(T); val_offset::Int = 0,

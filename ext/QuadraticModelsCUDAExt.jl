@@ -3,8 +3,11 @@ module QuadraticModelsCUDAExt
 using CUDA
 using CUDA.CUSPARSE
 using SparseArrays
+using NLPModels
 using KernelAbstractions
-import QuadraticModels: _gather_mul!, _batch_spmv_impl!, BatchSparseOp
+import QuadraticModels
+import QuadraticModels: _gather_mul!, _batch_spmv_impl!, BatchSparseOp,
+    BatchQuadraticModel, ObjRHSBatchQuadraticModel, QPData
 
 @kernel function _gather_mul_kernel!(
   out, @Const(A), @Const(a_map), @Const(B), @Const(b_map),
@@ -131,6 +134,55 @@ function _launch_warp_kernel!(
     CUDA.@cuda always_inline=true threads=threads blocks=blocks _warp_spmv_kernel!(
         out, op.nzVals, B, op.flat_packed, op.rowptr,
         alpha, beta, val_offset, nout, bs,
+    )
+end
+
+function _cu_op(op::BatchSparseOp, nzVals_gpu::CuMatrix)
+    BatchSparseOp(
+        nzVals_gpu,
+        CuVector{Int32}(op.rowptr),
+        CuVector{Int32}(op.flat_nz),
+        CuVector{Int32}(op.flat_val),
+        CuVector{Int64}(op.flat_packed),
+        op.max_row_nnz,
+        op.mean_row_nnz,
+    )
+end
+
+function Base.convert(::Type{BatchQuadraticModel{T, MT}}, bnlp::BatchQuadraticModel{T}) where {T, MT<:CuMatrix}
+    nbatch = bnlp.meta.nbatch
+    nvar = bnlp.meta.nvar
+    ncon = bnlp.meta.ncon
+
+    meta_gpu = NLPModels.BatchNLPModelMeta{T, MT}(
+        nbatch, nvar;
+        x0 = MT(bnlp.meta.x0),
+        lvar = MT(bnlp.meta.lvar),
+        uvar = MT(bnlp.meta.uvar),
+        ncon = ncon,
+        lcon = MT(bnlp.meta.lcon),
+        ucon = MT(bnlp.meta.ucon),
+        nnzj = bnlp.meta.nnzj,
+        nnzh = bnlp.meta.nnzh,
+        islp = bnlp.meta.islp,
+    )
+
+    VT = CuVector{T}
+    VI = CuVector{Int}
+
+    H_nzvals_gpu = MT(bnlp.H_nzvals)
+    A_nzvals_gpu = MT(bnlp.A_nzvals)
+
+    return BatchQuadraticModel{T, MT, VT, VI}(
+        meta_gpu,
+        MT(bnlp.c_batch), VT(bnlp.c0_batch),
+        H_nzvals_gpu, A_nzvals_gpu,
+        VI(bnlp.hess_rows), VI(bnlp.hess_cols),
+        VI(bnlp.A_rows), VI(bnlp.A_cols),
+        _cu_op(bnlp.jac_op, A_nzvals_gpu),
+        _cu_op(bnlp.jact_op, A_nzvals_gpu),
+        _cu_op(bnlp.hess_op, H_nzvals_gpu),
+        CUDA.zeros(T, nvar, nbatch),
     )
 end
 

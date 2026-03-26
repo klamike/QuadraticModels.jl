@@ -23,14 +23,19 @@ function _coo_to_csr(indices::AbstractVector{Int}, n::Int)
   return rowptr, colidx
 end
 
-struct BatchSparseOp{VI, MT}
+struct BatchSparseOp{VI, VI64, MT}
   nzVals::MT
   rowptr::VI
   flat_nz::VI
   flat_val::VI
+  flat_packed::VI64  # packed (nz << 32 | val) to optimize load on GPU
   max_row_nnz::Int32
   mean_row_nnz::Float32
 end
+
+@inline _pack_nz_val(nz::Int32, val::Int32) = (Int64(nz) << 32) | Int64(val)
+@inline _unpack_nz(packed::Int64) = Int32(packed >> 32)
+@inline _unpack_val(packed::Int64) = Int32(packed & 0xffffffff)
 
 function _row_stats(rowptr::AbstractVector)
   nrows = length(rowptr) - 1
@@ -53,7 +58,11 @@ function _build_op(nzVals, rowptr, nz_map, val_map, colidx)
     flat_nz .= nz_map[colidx]
     flat_val .= val_map[colidx]
   end
-  return BatchSparseOp(nzVals, rowptr, flat_nz, flat_val, max_nnz, mean_nnz)
+  flat_packed = Vector{Int64}(undef, length(colidx))
+  for i in eachindex(flat_packed)
+    flat_packed[i] = _pack_nz_val(Int32(flat_nz[i]), Int32(flat_val[i]))
+  end
+  return BatchSparseOp(nzVals, rowptr, flat_nz, flat_val, flat_packed, max_nnz, mean_nnz)
 end
 
 function batch_spmv!(

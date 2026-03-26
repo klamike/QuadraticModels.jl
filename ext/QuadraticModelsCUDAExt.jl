@@ -49,7 +49,7 @@ end
 # scalar kernel: 1 thread per (r, j)
 _scalar_spmv_kernel!(
     out, A, B,
-    flat_nz, flat_val, rowptr,
+    flat_packed, rowptr,
     alpha, beta, val_offset::Int32, nout::Int32, bs::Int32,
 ) = begin
     j = Int32((blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x)
@@ -60,7 +60,10 @@ _scalar_spmv_kernel!(
     acc = zero(eltype(out))
     @inbounds begin
         for k in rowptr[r]:rowptr[r + Int32(1)] - Int32(1)
-            acc += A[flat_nz[k], j] * B[flat_val[k] + val_offset, j]
+            packed = flat_packed[k]
+            nz = Int32(packed >> 32)
+            val = Int32(packed & 0xffffffff)
+            acc += A[nz, j] * B[val + val_offset, j]
         end
         out[r, j] = alpha * acc + beta * out[r, j]
     end
@@ -74,8 +77,8 @@ function _launch_scalar_kernel!(
     tx, ty = Int32(32), Int32(4)
     threads = (tx, ty)
     blocks = (cld(Int(bs), Int(tx)), cld(Int(nout), Int(ty)))
-    CUDA.@cuda always_inline=true threads=threads blocks=blocks _scalar_spmv_kernel!(
-        out, op.nzVals, B, op.flat_nz, op.flat_val, op.rowptr,
+    CUDA.@cuda always_inline=true maxregs=32 threads=threads blocks=blocks _scalar_spmv_kernel!(
+        out, op.nzVals, B, op.flat_packed, op.rowptr,
         alpha, beta, val_offset, nout, bs,
     )
 end
@@ -83,7 +86,7 @@ end
 # warp kernel: 1 warp / 32 threads per (r, j) output
 _warp_spmv_kernel!(
     out, A, B,
-    flat_nz, flat_val, rowptr,
+    flat_packed, rowptr,
     alpha, beta, val_offset::Int32, nout::Int32, bs::Int32,
 ) = begin
     lane = Int32(threadIdx().x - Int32(1))  # 0:31
@@ -98,7 +101,10 @@ _warp_spmv_kernel!(
         stop = rowptr[r + Int32(1)] - Int32(1)
         k = start + lane
         while k <= stop
-            acc += A[flat_nz[k], j] * B[flat_val[k] + val_offset, j]
+            packed = flat_packed[k]
+            nz = Int32(packed >> 32)
+            val = Int32(packed & 0xffffffff)
+            acc += A[nz, j] * B[val + val_offset, j]
             k += Int32(32)
         end
     end
@@ -123,7 +129,7 @@ function _launch_warp_kernel!(
     threads = (Int32(32), rows_per_block)
     blocks = (Int(bs), cld(Int(nout), Int(rows_per_block)))
     CUDA.@cuda always_inline=true threads=threads blocks=blocks _warp_spmv_kernel!(
-        out, op.nzVals, B, op.flat_nz, op.flat_val, op.rowptr,
+        out, op.nzVals, B, op.flat_packed, op.rowptr,
         alpha, beta, val_offset, nout, bs,
     )
 end

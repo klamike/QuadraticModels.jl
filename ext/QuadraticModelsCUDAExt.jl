@@ -68,7 +68,7 @@ _scalar_spmv_kernel!(
             val = Int32(packed & 0xffffffff)
             acc += A[nz, j] * B[val + val_offset, j]
         end
-        out[r, j] = alpha * acc + beta * out[r, j]
+        out[r, j] = iszero(beta) ? alpha * acc : alpha * acc + beta * out[r, j]
     end
     return nothing
 end
@@ -119,7 +119,7 @@ _warp_spmv_kernel!(
     end
 
     @inbounds if lane == Int32(0)
-        out[r, j] = alpha * acc + beta * out[r, j]
+        out[r, j] = iszero(beta) ? alpha * acc : alpha * acc + beta * out[r, j]
     end
     return nothing
 end

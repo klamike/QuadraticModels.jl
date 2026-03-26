@@ -77,7 +77,7 @@ function _launch_scalar_kernel!(
     tx, ty = Int32(32), Int32(4)
     threads = (tx, ty)
     blocks = (cld(Int(bs), Int(tx)), cld(Int(nout), Int(ty)))
-    CUDA.@cuda always_inline=true maxregs=32 threads=threads blocks=blocks _scalar_spmv_kernel!(
+    CUDA.@cuda always_inline=true threads=threads blocks=blocks _scalar_spmv_kernel!(
         out, op.nzVals, B, op.flat_packed, op.rowptr,
         alpha, beta, val_offset, nout, bs,
     )

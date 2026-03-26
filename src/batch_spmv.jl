@@ -38,7 +38,7 @@ function _row_stats(rowptr::AbstractVector)
   max_nnz = Int32(0)
   total = Int32(0)
   @inbounds for r in 1:nrows
-    rl = rowptr[r+1] - rowptr[r]
+    rl = Int32(rowptr[r+1] - rowptr[r])
     max_nnz = max(max_nnz, rl)
     total += rl
   end

@@ -74,7 +74,7 @@ function _launch_scalar_kernel!(
     out::AbstractMatrix{T}, op, B, alpha::T, beta::T,
     val_offset::Int32, nout::Int32, bs::Int32,
 ) where T
-    tx, ty = Int32(32), Int32(4)
+    tx, ty = Int32(32), Int32(8)
     threads = (tx, ty)
     blocks = (cld(Int(bs), Int(tx)), cld(Int(nout), Int(ty)))
     CUDA.@cuda always_inline=true threads=threads blocks=blocks _scalar_spmv_kernel!(
